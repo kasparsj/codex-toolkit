@@ -19,3 +19,15 @@ In a Codex chat, invoke the skill with a task you want to delegate.
 > $handoff Implement the agreed CSV export change in a fresh executor. Preserve the existing export format and verify the export tests.
 
 [Read the skill](skills/handoff/SKILL.md)
+
+## Fresh handoff
+
+Run `$fresh-handoff` in the Codex desktop chat you want to leave. It derives the next task from that chat and starts a new chat with a short brief as its first message.
+
+Add a focus if the source chat covers several tasks.
+
+> $fresh-handoff Fix the CSV export regression we agreed on.
+
+You can also supply a chat link or ID to hand off work from a different chat.
+
+[Read the skill](skills/fresh-handoff/SKILL.md)
