@@ -39,3 +39,19 @@ You can also supply a chat link or ID to hand off work from a different chat.
 > $client-feedback-triage Triage the feedback below against the current repository and draft the proposed GitHub changes for review.
 
 [Read the skill](skills/client-feedback-triage/SKILL.md)
+
+## Plan PR
+
+`$plan-pr` plans a selected GitHub issue and opens a draft planning PR with verification steps and JPEG mockups when useful. It chooses the planning depth based on the issue's scope, uncertainty, and risk.
+
+> $plan-pr https://github.com/owner/repo/issues/42
+
+Use `--local` to keep the plan in the checkout. [Read the skill](skills/plan-pr/SKILL.md)
+
+## Plan the next issue
+
+`$plan-next-issue` ranks the open issues in a GitHub repository, selects one eligible issue, and runs `plan-pr` to prepare a draft for human review. Install both skills together. Use `--rank-only` to see the shortlist.
+
+> $plan-next-issue owner/repo
+
+[Read the skill](skills/plan-next-issue/SKILL.md)
