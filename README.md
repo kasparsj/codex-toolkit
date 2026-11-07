@@ -31,3 +31,11 @@ Add a focus if the source chat covers several tasks.
 You can also supply a chat link or ID to hand off work from a different chat.
 
 [Read the skill](skills/fresh-handoff/SKILL.md)
+
+## Client feedback triage
+
+`$client-feedback-triage` checks client feedback against the codebase and existing GitHub work, then prepares a change set for review.
+
+> $client-feedback-triage Triage the feedback below against the current repository and draft the proposed GitHub changes for review.
+
+[Read the skill](skills/client-feedback-triage/SKILL.md)
