@@ -97,8 +97,10 @@ An empty result completes the runner and releases the claim.
 `pr-closeout` returns a merge-readiness `status` and a separate
 `delivery_status`, each `READY`, `WAITING`, or `BLOCKED`. Pending delivery checks
 keep the claim active. Merge-only requirements such as approvals or a merge
-queue can leave merge readiness waiting while delivery is complete. Each result
-uses this envelope and a kind-specific allowlist:
+queue can leave merge readiness waiting while delivery is complete. Closeout
+must report actual check states or `["no_required_checks"]` when verified
+against applicable rules. Each result uses this envelope and a kind-specific
+allowlist:
 
 ```json
 {

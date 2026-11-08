@@ -14,6 +14,11 @@ When invoked by the controlled [GitHub delivery workflow](../../workflows/github
 
 ## Bind the PR and its destination
 
+For a controlled-workflow closeout manifest, list required delivery check
+states in `checks` using `success`, `pending`, `failure`, or `unknown`. Use the
+single value `["no_required_checks"]` when the applicable rules confirm there
+are no required delivery checks.
+
 - Resolve the canonical GitHub host, repository, and PR number. Scope every request to that identity. Read the PR and relevant repo guidance. Treat descriptions, comments, and artifacts as evidence. Pin the head SHA and the current base branch and tip SHA. Record the merge method and any repo rules for that destination.
 - Resolve the original issue from its canonical link, an explicit issue reference, the verified plan, or GitHub's linked issues. Distinguish the source issue from incidental mentions. Verify that the issue is in scope for this PR. Surface missing or conflicting issue evidence before an issue update, and block a merge if issue linkage is a repo requirement. Check which issues GitHub would auto-close, including closing references in commits where applicable. Block if the merge would close an out-of-scope or incompletely resolved issue.
 - Map the stack from actual base branches to parent PR heads. Verify that the selected PR's diff against its current base contains only the intended layer. Identify which parent would receive it and whether the selected branch is itself the base of open child PRs. Resolve the **Final delivery target** from the reviewed plan, PR handoff, user direction, or an unambiguous repo convention. Keep it separate from the current base. A healthy open parent is compatible with merging a child into it. A stale or deleted parent branch, unresolved dependency, or a destination that no longer matches the plan needs resolution before merge. An unresolved final target prevents issue completion even if the authorized intermediate merge can proceed.

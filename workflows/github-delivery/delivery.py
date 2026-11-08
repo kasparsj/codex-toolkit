@@ -466,17 +466,25 @@ class Coordinator:
         else:
             result = manifest["result"]
             published = state.get("publication", {}).get("final", {}).get("pr")
-            if published:
-                require(result.get("head_sha") == published["head_sha"]
-                        and result.get("base_sha") == published["base_sha"],
-                        "closeout revisions differ from verified publication")
+            require(published is not None, "closeout requires verified publication")
+            require(result.get("head_sha") == published["head_sha"]
+                    and result.get("base_sha") == published["base_sha"],
+                    "closeout revisions differ from verified publication")
             verdict = result.get("status")
             require(verdict in ("READY", "WAITING", "BLOCKED"), "invalid closeout status")
             delivery_status = result.get("delivery_status")
             require(delivery_status in ("READY", "WAITING", "BLOCKED"), "invalid delivery closeout status")
-            require(delivery_status != "READY"
-                    or not any(check in ("pending", "failure") for check in result.get("checks", [])),
-                    "delivery readiness conflicts with pending or failed checks")
+            checks = result.get("checks")
+            no_checks = checks == ["no_required_checks"]
+            require(no_checks or (isinstance(checks, list) and checks and all(
+                check in ("success", "pending", "failure", "unknown") for check in checks)),
+                "delivery checks must contain known states or confirmed absence of requirements")
+            if delivery_status == "READY":
+                require(no_checks or all(check == "success" for check in checks),
+                        "delivery readiness requires successful or confirmed absent checks")
+            elif delivery_status == "WAITING":
+                require("pending" in checks and all(check in ("success", "pending") for check in checks),
+                        "delivery can wait only for pending checks")
             state["merge_readiness"] = verdict
             state["status"] = {"READY": "review_ready", "WAITING": "ci_waiting", "BLOCKED": "blocked"}[delivery_status]
         state["history"].append({"event": f"{kind}_manifest", "generation": generation,

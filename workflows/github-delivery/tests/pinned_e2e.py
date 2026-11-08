@@ -141,6 +141,16 @@ print(json.dumps(out))
         assert result["publication"]["final"]["pr"]["draft"] is False
         active_path, = (root / "state" / "repos").glob("*/active.json")
         assert json.loads(active_path.read_text())["status"] == "released"
+        claim = json.loads(active_path.read_text())
+        claim["status"] = "active"
+        active_path.write_text(json.dumps(claim))
+        terminal_state = {**result, "runner_status": "running", "runner_pid": None}
+        state_path.write_text(json.dumps(terminal_state))
+        publication_log = publisher.with_suffix(".log").read_bytes()
+        completed = subprocess.run(recover, text=True, capture_output=True, check=True)
+        assert json.loads(completed.stdout)["status"] == "review_ready"
+        assert json.loads(active_path.read_text())["status"] == "released"
+        assert publisher.with_suffix(".log").read_bytes() == publication_log
 
         rank_log = root / "rank.log"
         ranker = root / "ranker.py"

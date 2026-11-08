@@ -242,7 +242,16 @@ class DeliveryTest(unittest.TestCase):
         manifest = {"schema_version": 1, "kind": "closeout", "delivery_id": state["delivery_id"],
                     "repo": state["repo"], "result": {"status": "WAITING", "delivery_status": "READY",
                     "head_sha": "d" * 40, "base_sha": "c" * 40, "checks": ["pending"]}}
-        with self.assertRaisesRegex(delivery.DeliveryError, "pending or failed checks"):
+        with self.assertRaisesRegex(delivery.DeliveryError, "verified publication"):
+            coordinator.accept_manifest(state, manifest)
+        state["publication"] = {"final": {"pr": {"head_sha": "d" * 40, "base_sha": "c" * 40}}}
+        for invalid in ([], ["bogus"], "success", ["no_required_checks", "pending"]):
+            with self.subTest(checks=invalid):
+                manifest["result"]["checks"] = invalid
+                with self.assertRaisesRegex(delivery.DeliveryError, "known states"):
+                    coordinator.accept_manifest(state, manifest)
+        manifest["result"]["checks"] = ["pending"]
+        with self.assertRaisesRegex(delivery.DeliveryError, "successful or confirmed absent"):
             coordinator.accept_manifest(state, manifest)
         manifest["result"]["delivery_status"] = "WAITING"
         coordinator.accept_manifest(state, manifest)
@@ -399,12 +408,13 @@ class DeliveryTest(unittest.TestCase):
     def test_completed_runner_can_resume_ci_wait_and_releases_claim(self):
         state = self.start(); launcher = self.root / "closeout.py"
         state["status"] = "ci_waiting"; state["runner_status"] = "completed"
+        state["publication"] = {"final": {"pr": {"head_sha": "d" * 40, "base_sha": "c" * 40}}}
         state["agent"] = {"launcher": str(launcher), "worktree": str(self.root),
             "scratch": str(self.root / "scratch"), "skills_root": str(self.skills)}
         delivery.Coordinator(self.root / "state").save(state)
         manifest = {"schema_version": 1, "kind": "closeout", "delivery_id": state["delivery_id"],
             "repo": state["repo"], "result": {"status": "WAITING", "delivery_status": "READY", "head_sha": "d" * 40,
-            "base_sha": "c" * 40, "checks": ["success"]}}
+            "base_sha": "c" * 40, "checks": ["no_required_checks"]}}
         launcher.write_text("#!/usr/bin/env python3\nimport json,sys\njson.load(sys.stdin)\nprint(" +
                             repr(json.dumps(manifest)) + ")\n"); launcher.chmod(0o700)
         completed = subprocess.run([sys.executable, str(MODULE), "resume", "--state-dir", str(self.root / "state"),
