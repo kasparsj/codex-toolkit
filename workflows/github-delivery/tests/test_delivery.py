@@ -298,6 +298,15 @@ class DeliveryTest(unittest.TestCase):
         recovered = coordinator.recover(state, old_pid_alive=False)
         self.assertEqual(recovered["attempt"], 2)
 
+    def test_invalid_startup_does_not_strand_claim(self):
+        coordinator = delivery.Coordinator(self.root / "state")
+        repo = "github.test/acme/widget"
+        with self.assertRaisesRegex(delivery.DeliveryError, "missing pinned skill package"):
+            coordinator.start(repo=repo, issue=42, policy=self.policy(), skills_root=self.root / "missing")
+        self.assertFalse((coordinator._repo_dir(repo) / "active.json").exists())
+        started = coordinator.start(repo=repo, issue=42, policy=self.policy(), skills_root=self.skills)
+        self.assertEqual(started["status"], "plan_required")
+
     def test_operation_manifest_scope_and_existing_label(self):
         state = self.start(); coordinator = delivery.Coordinator(self.root / "state")
         fake = FakeGitHub(self.root / "fake-gh.json")

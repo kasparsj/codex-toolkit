@@ -374,7 +374,8 @@ class Coordinator:
         return self._repo_dir(repo) / "deliveries" / delivery_id / "state.json"
 
     def start(self, *, repo: str, issue: int | None, policy: dict[str, Any],
-              skills_root: Path, delivery_id: str | None = None) -> dict[str, Any]:
+              skills_root: Path, delivery_id: str | None = None, agent: dict[str, str] | None = None,
+              publisher_launcher: str | None = None) -> dict[str, Any]:
         validate_repo(repo)
         repo_dir = self._repo_dir(repo)
         with mutex(repo_dir / "claim.lock"):
@@ -388,10 +389,8 @@ class Coordinator:
             validate_delivery_id(stable)
             require(issue is None or type(issue) is int and issue > 0, "invalid issue number")
             require(not self._delivery_path(repo, stable).exists(), "delivery ID already exists")
-            claim = {"delivery_id": stable, "repo": repo, "issue": None, "status": "claimed",
+            claim = {"delivery_id": stable, "repo": repo, "issue": issue, "status": "active",
                      "claimed_at": utc_now()}
-            atomic_json(active_path, claim)  # durable claim precedes candidate selection
-            claim["issue"] = issue
             state = {"schema_version": SCHEMA_VERSION, **claim, "attempt": 1,
                      "runner_pid": None, "runner_status": "idle", "policy": policy["_source"],
                      "policy_values": policy, "skill_hashes": skill_hashes(skills_root),
@@ -399,8 +398,10 @@ class Coordinator:
                      "requirements": policy_requirements(policy), "operations": [],
                      "receipts": {}, "history": [{"event": "claimed", "at": utc_now()}],
                      "status": "plan_required" if issue is not None else "rank_required"}
+            if agent is not None:
+                state.update(agent=agent, publisher_launcher=publisher_launcher)
             atomic_json(self._delivery_path(repo, stable), state)
-            claim["status"] = "active"; atomic_json(active_path, claim)
+            atomic_json(active_path, claim)  # durable, loadable claim precedes candidate selection
             return state
 
     def load(self, repo: str, delivery_id: str) -> dict[str, Any]:
@@ -597,6 +598,12 @@ def parser() -> argparse.ArgumentParser:
 
 
 def run_successor(coordinator: Coordinator, state: dict[str, Any]) -> dict[str, Any]:
+    require(isinstance(state.get("agent"), dict) and isinstance(state.get("publisher_launcher"), str),
+            "dispatch requires persisted launcher configuration")
+    if state["status"] not in ("completed", "review_ready"):
+        active = read_json(coordinator._repo_dir(state["repo"]) / "active.json")
+        require(active["delivery_id"] == state["delivery_id"] and active["status"] == "active",
+                "dispatch requires the current active delivery claim")
     state["runner_status"] = "running"
     state["runner_pid"] = os.getpid()
     coordinator.save(state)
@@ -618,13 +625,12 @@ def main(argv: list[str] | None = None) -> int:
             policy = load_policy(args.policy, expected_digest=args.policy_digest,
                 source_ref=args.policy_ref, source_sha=args.policy_sha, fetched_at=args.policy_fetched_at)
             value = coordinator.start(repo=args.repo, issue=args.issue, policy=policy,
-                                      skills_root=args.skills_root, delivery_id=args.delivery_id)
-            value["agent"] = {"launcher": str(args.agent_launcher.resolve()),
+                skills_root=args.skills_root, delivery_id=args.delivery_id,
+                agent={"launcher": str(args.agent_launcher.resolve()),
                               "worktree": str(args.worktree.resolve()),
                               "scratch": str(args.agent_scratch.resolve()),
-                              "skills_root": str(args.skills_root.resolve())}
-            value["publisher_launcher"] = str(args.publisher_launcher.resolve())
-            coordinator.save(value)
+                              "skills_root": str(args.skills_root.resolve())},
+                publisher_launcher=str(args.publisher_launcher.resolve()))
             if not args.no_dispatch:
                 value = run_successor(coordinator, value)
         else:
@@ -636,7 +642,7 @@ def main(argv: list[str] | None = None) -> int:
                 current = value.get("runner", {}).get("current_step_id")
                 stage = "plan" if current == "plan-review" else (
                     "implementation" if current == "implementation-review" else None)
-                if value["runner_status"] == "idle" and value.get("corrections"):
+                if value["runner_status"] == "idle":
                     value = run_successor(coordinator, value)
                 elif value["runner_status"] == "paused" and stage:
                     import publisher_adapter

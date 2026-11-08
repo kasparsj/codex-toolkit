@@ -169,15 +169,30 @@ print(json.dumps({'schema_version':1,'kind':p['kind'],'delivery_id':p['delivery_
             "--policy-digest", digest, "--policy-fetched-at", dt.datetime.now(dt.timezone.utc).isoformat(),
             "--skills-root", str(ROOT / "skills"), "--agent-launcher", str(ranker),
             "--publisher-launcher", "/usr/bin/false", "--worktree", str(root),
-            "--agent-scratch", str(root / "empty-agent-scratch")]
+            "--agent-scratch", str(root / "empty-agent-scratch"), "--no-dispatch"]
         completed = subprocess.run(no_candidate, text=True, capture_output=True)
         if completed.returncode:
             sys.stderr.write(completed.stderr + completed.stdout); return completed.returncode
         empty = json.loads(completed.stdout)
+        assert empty["runner_status"] == "idle", empty
+        assert not rank_log.exists()
+        resume_empty = [sys.executable, str(WORKFLOW / "delivery.py"), "resume",
+            "--state-dir", str(root / "empty-state"), "--repo", "github.test/acme/empty",
+            "--delivery-id", "pinned-empty", "--skills-root", str(ROOT / "skills")]
+        empty_active, = (root / "empty-state" / "repos").glob("*/active.json")
+        own_claim = json.loads(empty_active.read_text())
+        replacement = {**own_claim, "delivery_id": "replacement"}
+        empty_active.write_text(json.dumps(replacement))
+        rejected = subprocess.run(resume_empty, text=True, capture_output=True)
+        assert rejected.returncode == 2 and "current active delivery claim" in rejected.stdout
+        assert json.loads(empty_active.read_text()) == replacement
+        assert not rank_log.exists()
+        empty_active.write_text(json.dumps(own_claim))
+        completed = subprocess.run(resume_empty, text=True, capture_output=True, check=True)
+        empty = json.loads(completed.stdout)
         assert empty["runner"]["status"] == "completed", empty
         assert empty["status"] == "completed", empty
         assert rank_log.read_text().splitlines() == ["rank"]
-        empty_active, = (root / "empty-state" / "repos").glob("*/active.json")
         assert json.loads(empty_active.read_text())["status"] == "released"
         empty_state, = (root / "empty-state" / "repos").glob("*/deliveries/pinned-empty/state.json")
         interrupted = json.loads(empty_state.read_text())
@@ -188,9 +203,8 @@ print(json.dumps({'schema_version':1,'kind':p['kind'],'delivery_id':p['delivery_
         claim = json.loads(empty_active.read_text())
         claim["status"] = "active"  # Interrupt after saving terminal state, before releasing the claim.
         empty_active.write_text(json.dumps(claim))
-        recover_empty = [sys.executable, str(WORKFLOW / "delivery.py"), "recover",
-            "--state-dir", str(root / "empty-state"), "--repo", "github.test/acme/empty",
-            "--delivery-id", "pinned-empty", "--skills-root", str(ROOT / "skills")]
+        recover_empty = resume_empty.copy()
+        recover_empty[2] = "recover"
         completed = subprocess.run(recover_empty, text=True, capture_output=True)
         if completed.returncode:
             sys.stderr.write(completed.stderr + completed.stdout); return completed.returncode
