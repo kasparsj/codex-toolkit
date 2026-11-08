@@ -41,7 +41,7 @@ For `--rank`, stop after reporting the shortlist and winner. For either handoff,
 
 ### Review
 
-Load and follow the installed `issue-review` skill in the same session. Pass the canonical issue URL and target base as the review revision. Omit publication flags. If the skill is unavailable, report the selected issue, the missing dependency, and the `$issue-review <issue-url>` handoff with the target base. Return the verdict and local report path if produced, or the blocker, alongside the shortlist. Stop after reviewing the selected issue, regardless of verdict.
+Load and follow ECC's installed `issue-review` skill in the same session. Pass the canonical issue URL and target base as the review revision. Omit publication flags. If ECC's skill is unavailable, report the selected issue, the missing dependency, and the `$issue-review <issue-url>` handoff with the target base. Return the verdict and local report path if produced, or the blocker, alongside the shortlist. Stop after reviewing the selected issue, regardless of verdict. [ECC skill source](https://github.com/affaan-m/ecc/blob/main/skills/issue-review/SKILL.md)
 
 ### Plan
 

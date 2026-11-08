@@ -53,7 +53,13 @@ Use `--local` to keep the plan in the checkout. [Read the skill](skills/plan-pr/
 `$next-issue` ranks the open issues in a GitHub repository and selects the best eligible candidate.
 
 - `$next-issue owner/repo --rank` reports the shortlist and winner. Ranking is the default when you omit the mode.
-- `$next-issue owner/repo --review` runs the separately installed `issue-review` skill on the winner and stops after the review.
+- `$next-issue owner/repo --review` runs ECC's `issue-review` on the winner and stops after the review. [ECC skill source](https://github.com/affaan-m/ecc/blob/main/skills/issue-review/SKILL.md)
 - `$next-issue owner/repo --plan` uses `plan-pr` to open a draft planning PR for the winner.
+
+Install ECC's `issue-review` separately to use `--review`:
+
+```bash
+npx skills add affaan-m/ecc --skill issue-review -a codex -g
+```
 
 [Read the skill](skills/next-issue/SKILL.md)
