@@ -56,6 +56,14 @@ Use `--local` to keep the plan in the checkout. [Read the skill](skills/plan-pr/
 
 You can also pass a local plan path. Use `--base <branch-or-pr>` to target a specific branch or stack, or `--local` to implement without publishing. [Read the skill](skills/implement-plan/SKILL.md)
 
+## PR closeout
+
+`$pr-closeout` checks CI, approvals, and stack readiness for an existing implementation PR. Add `--merge` to merge the verified PR into its current base and reconcile the original issue.
+
+> $pr-closeout https://github.com/owner/repo/pull/43
+
+[Read the skill](skills/pr-closeout/SKILL.md)
+
 ## Choose the next issue
 
 `$next-issue` ranks the open issues in a GitHub repository and selects the best eligible candidate.
