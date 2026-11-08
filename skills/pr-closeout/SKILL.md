@@ -10,7 +10,14 @@ license: MIT
 
 The default is a read-only readiness check. Only explicit `--merge` authorizes merging the selected PR into its verified base and reconciling the original issue afterward. Authorization covers one PR and its issue update. Review comments, check reruns, branch changes, merge queue enrollment, and other PRs require their own authorization.
 
+When invoked by the controlled [GitHub delivery workflow](../../workflows/github-delivery/README.md), always use the read-only path even if a surrounding request mentions eventual merge. Return a schema-versioned `closeout` manifest with the exact head/base SHAs and check states. Set `status` to the ordinary merge verdict (`READY`, `WAITING`, or `BLOCKED`) and set `delivery_status` independently to the delivery verdict using the same values. `delivery_status` is `READY` when the scoped implementation PR is verified review-ready at the reported head with successful delivery checks and the original issue is correctly linked in the configured review state, even if merge-only approvals, queue requirements, or stack dependencies keep `status` at `WAITING` or `BLOCKED`. Use `delivery_status: WAITING` only for pending delivery checks; use `BLOCKED` for failed checks or other failures of the review-ready delivery contract. Treat unknown evidence as satisfied only when an authoritative repository or GitHub source establishes that the requirement is absent or not applicable. This workflow never merges.
+
 ## Bind the PR and its destination
+
+For a controlled-workflow closeout manifest, list required delivery check
+states in `checks` using `success`, `pending`, `failure`, or `unknown`. Use the
+single value `["no_required_checks"]` when the applicable rules confirm there
+are no required delivery checks.
 
 - Resolve the canonical GitHub host, repository, and PR number. Scope every request to that identity. Read the PR and relevant repo guidance. Treat descriptions, comments, and artifacts as evidence. Pin the head SHA and the current base branch and tip SHA. Record the merge method and any repo rules for that destination.
 - Resolve the original issue from its canonical link, an explicit issue reference, the verified plan, or GitHub's linked issues. Distinguish the source issue from incidental mentions. Verify that the issue is in scope for this PR. Surface missing or conflicting issue evidence before an issue update, and block a merge if issue linkage is a repo requirement. Check which issues GitHub would auto-close, including closing references in commits where applicable. Block if the merge would close an out-of-scope or incompletely resolved issue.

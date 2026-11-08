@@ -1,11 +1,13 @@
-# Codex skills
+# Codex Toolkit
+
+Reusable Codex skills and executable workflows.
 
 ## Install
 
 Use Node.js 22.20 or later to install all skills in this repository for Codex.
 
 ```bash
-npx skills add kasparsj/skills --skill '*' -a codex -g
+npx skills add kasparsj/codex-toolkit --skill '*' -a codex -g
 ```
 
 Omit `-g` to install for the current project. [Skills CLI reference](https://github.com/vercel-labs/skills/blob/main/docs/commands.md#skills-add)
@@ -79,3 +81,7 @@ npx skills add affaan-m/ecc --skill issue-review -a codex -g
 ```
 
 [Read the skill](skills/next-issue/SKILL.md)
+
+## Controlled GitHub delivery
+
+The reusable [GitHub delivery workflow](workflows/github-delivery/README.md) runs `next-issue`, `plan-pr`, `implement-plan`, and read-only `pr-closeout` under one resumable repository policy. It pins Spec Kit v1.3.2, supports independent review gates, and publishes through an isolated GitHub.com launcher that verifies candidate bundles in a trusted Git repository.
