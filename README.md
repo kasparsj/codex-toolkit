@@ -1,11 +1,13 @@
-# Codex skills
+# Codex Toolkit
+
+Reusable Codex skills and executable workflows.
 
 ## Install
 
 Use Node.js 22.20 or later to install all skills in this repository for Codex.
 
 ```bash
-npx skills add kasparsj/skills --skill '*' -a codex -g
+npx skills add kasparsj/codex-toolkit --skill '*' -a codex -g
 ```
 
 Omit `-g` to install for the current project. [Skills CLI reference](https://github.com/vercel-labs/skills/blob/main/docs/commands.md#skills-add)
