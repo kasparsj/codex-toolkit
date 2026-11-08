@@ -8,9 +8,9 @@ Use existing mockup paths or default to `docs/mockups/`. Create standalone HTML 
 node /absolute/path/to/plan-pr/scripts/render-mockup.cjs docs/mockups/issue-42-export.html
 ```
 
-Pass `WIDTH HEIGHT` after the input to override the default 1440×1000 viewport. The renderer replaces `.html` with `.jpeg` and captures the full page. Use a viewport that shows the review-critical state.
+Pass `WIDTH HEIGHT` after the input to override the default 1440×1000 viewport. The renderer replaces `.html` with `.jpeg` and captures the full page. It blocks HTTP, HTTPS, and WebSocket connections while preserving local and embedded assets. Use a viewport that shows the review-critical state.
 
-If the target checkout lacks Playwright, set `PLAN_PR_PLAYWRIGHT_ROOT` to a separate directory containing `node_modules/playwright`. Use an existing tooling directory or, when tooling installation is allowed, install into a temporary directory with `npm install --prefix "$renderer_dir" --no-save playwright`. Set `PLAN_PR_CHROMIUM_CHANNEL=chrome` to use installed Google Chrome when Playwright's bundled Chromium is unavailable. Otherwise use an available browser screenshot tool that can produce a JPEG. Keep renderer tooling out of the PR.
+The renderer requires Playwright 1.48 or later. If the target checkout lacks it, set `PLAN_PR_PLAYWRIGHT_ROOT` to a separate directory containing `node_modules/playwright`. Use an existing tooling directory or, when tooling installation is allowed, install into a temporary directory with `npm install --prefix "$renderer_dir" --no-save playwright`. If Playwright's matching Chromium is missing, install it with `node "$renderer_dir/node_modules/playwright/cli.js" install chromium`, using the directory containing the selected Playwright package. To use installed Google Chrome, set `PLAN_PR_CHROMIUM_CHANNEL=chrome`. Otherwise use an available browser screenshot tool that can produce a JPEG. Keep renderer tooling out of the PR.
 
 Inspect the generated JPEG for missing assets, incorrect state, or clipping, and link both files from the plan. If rendering remains blocked, report the gap and keep the proposal local when the missing image is essential to review.
 
