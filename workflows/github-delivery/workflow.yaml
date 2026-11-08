@@ -14,6 +14,11 @@ inputs:
   agent_scratch: {type: string, required: true}
   skills_root: {type: string, required: true}
   run_rank: {type: boolean, required: true}
+  run_plan: {type: boolean, required: true}
+  publish_plan: {type: boolean, required: true}
+  run_implementation: {type: boolean, required: true}
+  publish_implementation: {type: boolean, required: true}
+  finalize: {type: boolean, required: true}
   plan_gate: {type: boolean, required: true}
   implementation_gate: {type: boolean, required: true}
   plan_verdict: {type: string, enum: ["", approve, reject], default: ""}
@@ -50,25 +55,33 @@ steps:
         run: |
           set -euo pipefail
           python3 "$DELIVERY_ADAPTER_DIR/adapter.py" run --kind rank --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID" --launcher "$DELIVERY_AGENT_LAUNCHER" --worktree "$DELIVERY_WORKTREE" --scratch "$DELIVERY_AGENT_SCRATCH/rank" --skills-root "$DELIVERY_SKILLS_ROOT"
-  - id: plan-local
-    type: shell
-    strict: true
-    env: *agent_env
-    run: |
-      set -euo pipefail
-      python3 "$DELIVERY_ADAPTER_DIR/adapter.py" run --kind plan --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID" --launcher "$DELIVERY_AGENT_LAUNCHER" --worktree "$DELIVERY_WORKTREE" --scratch "$DELIVERY_AGENT_SCRATCH/plan" --skills-root "$DELIVERY_SKILLS_ROOT"
-  - id: publish-plan
-    type: shell
-    strict: true
-    env:
-      DELIVERY_STATE_DIR: "{{ inputs.state_dir }}"
-      DELIVERY_REPO: "{{ inputs.repo }}"
-      DELIVERY_ID: "{{ inputs.delivery_id }}"
-      DELIVERY_PUBLISHER_LAUNCHER: "{{ inputs.publisher_launcher }}"
-      DELIVERY_ADAPTER_DIR: "{{ inputs.adapter_dir }}"
-    run: |
-      set -euo pipefail
-      python3 "$DELIVERY_ADAPTER_DIR/publisher_adapter.py" publish-plan --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID" --launcher "$DELIVERY_PUBLISHER_LAUNCHER"
+  - id: dispatch-plan-local
+    type: if
+    condition: "{{ inputs.run_plan }}"
+    then:
+      - id: plan-local
+        type: shell
+        strict: true
+        env: *agent_env
+        run: |
+          set -euo pipefail
+          python3 "$DELIVERY_ADAPTER_DIR/adapter.py" run --kind plan --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID" --launcher "$DELIVERY_AGENT_LAUNCHER" --worktree "$DELIVERY_WORKTREE" --scratch "$DELIVERY_AGENT_SCRATCH/plan" --skills-root "$DELIVERY_SKILLS_ROOT"
+  - id: dispatch-publish-plan
+    type: if
+    condition: "{{ inputs.publish_plan }}"
+    then:
+      - id: publish-plan
+        type: shell
+        strict: true
+        env:
+          DELIVERY_STATE_DIR: "{{ inputs.state_dir }}"
+          DELIVERY_REPO: "{{ inputs.repo }}"
+          DELIVERY_ID: "{{ inputs.delivery_id }}"
+          DELIVERY_PUBLISHER_LAUNCHER: "{{ inputs.publisher_launcher }}"
+          DELIVERY_ADAPTER_DIR: "{{ inputs.adapter_dir }}"
+        run: |
+          set -euo pipefail
+          python3 "$DELIVERY_ADAPTER_DIR/publisher_adapter.py" publish-plan --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID" --launcher "$DELIVERY_PUBLISHER_LAUNCHER"
   - id: optional-plan-gate
     type: if
     condition: "{{ inputs.plan_gate }}"
@@ -94,25 +107,33 @@ steps:
         run: |
           set -euo pipefail
           python3 "$DELIVERY_ADAPTER_DIR/delivery.py" advance --stage plan --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID"
-  - id: implementation-local
-    type: shell
-    strict: true
-    env: *agent_env
-    run: |
-      set -euo pipefail
-      python3 "$DELIVERY_ADAPTER_DIR/adapter.py" run --kind implement --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID" --launcher "$DELIVERY_AGENT_LAUNCHER" --worktree "$DELIVERY_WORKTREE" --scratch "$DELIVERY_AGENT_SCRATCH/implement" --skills-root "$DELIVERY_SKILLS_ROOT"
-  - id: publish-implementation
-    type: shell
-    strict: true
-    env:
-      DELIVERY_STATE_DIR: "{{ inputs.state_dir }}"
-      DELIVERY_REPO: "{{ inputs.repo }}"
-      DELIVERY_ID: "{{ inputs.delivery_id }}"
-      DELIVERY_PUBLISHER_LAUNCHER: "{{ inputs.publisher_launcher }}"
-      DELIVERY_ADAPTER_DIR: "{{ inputs.adapter_dir }}"
-    run: |
-      set -euo pipefail
-      python3 "$DELIVERY_ADAPTER_DIR/publisher_adapter.py" publish-implementation --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID" --launcher "$DELIVERY_PUBLISHER_LAUNCHER"
+  - id: dispatch-implementation-local
+    type: if
+    condition: "{{ inputs.run_implementation }}"
+    then:
+      - id: implementation-local
+        type: shell
+        strict: true
+        env: *agent_env
+        run: |
+          set -euo pipefail
+          python3 "$DELIVERY_ADAPTER_DIR/adapter.py" run --kind implement --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID" --launcher "$DELIVERY_AGENT_LAUNCHER" --worktree "$DELIVERY_WORKTREE" --scratch "$DELIVERY_AGENT_SCRATCH/implement" --skills-root "$DELIVERY_SKILLS_ROOT"
+  - id: dispatch-publish-implementation
+    type: if
+    condition: "{{ inputs.publish_implementation }}"
+    then:
+      - id: publish-implementation
+        type: shell
+        strict: true
+        env:
+          DELIVERY_STATE_DIR: "{{ inputs.state_dir }}"
+          DELIVERY_REPO: "{{ inputs.repo }}"
+          DELIVERY_ID: "{{ inputs.delivery_id }}"
+          DELIVERY_PUBLISHER_LAUNCHER: "{{ inputs.publisher_launcher }}"
+          DELIVERY_ADAPTER_DIR: "{{ inputs.adapter_dir }}"
+        run: |
+          set -euo pipefail
+          python3 "$DELIVERY_ADAPTER_DIR/publisher_adapter.py" publish-implementation --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID" --launcher "$DELIVERY_PUBLISHER_LAUNCHER"
   - id: optional-implementation-gate
     type: if
     condition: "{{ inputs.implementation_gate }}"
@@ -138,18 +159,22 @@ steps:
         run: |
           set -euo pipefail
           python3 "$DELIVERY_ADAPTER_DIR/delivery.py" advance --stage implementation --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID"
-  - id: finalize
-    type: shell
-    strict: true
-    env:
-      DELIVERY_STATE_DIR: "{{ inputs.state_dir }}"
-      DELIVERY_REPO: "{{ inputs.repo }}"
-      DELIVERY_ID: "{{ inputs.delivery_id }}"
-      DELIVERY_PUBLISHER_LAUNCHER: "{{ inputs.publisher_launcher }}"
-      DELIVERY_ADAPTER_DIR: "{{ inputs.adapter_dir }}"
-    run: |
-      set -euo pipefail
-      python3 "$DELIVERY_ADAPTER_DIR/publisher_adapter.py" finalize --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID" --launcher "$DELIVERY_PUBLISHER_LAUNCHER"
+  - id: dispatch-finalize
+    type: if
+    condition: "{{ inputs.finalize }}"
+    then:
+      - id: finalize
+        type: shell
+        strict: true
+        env:
+          DELIVERY_STATE_DIR: "{{ inputs.state_dir }}"
+          DELIVERY_REPO: "{{ inputs.repo }}"
+          DELIVERY_ID: "{{ inputs.delivery_id }}"
+          DELIVERY_PUBLISHER_LAUNCHER: "{{ inputs.publisher_launcher }}"
+          DELIVERY_ADAPTER_DIR: "{{ inputs.adapter_dir }}"
+        run: |
+          set -euo pipefail
+          python3 "$DELIVERY_ADAPTER_DIR/publisher_adapter.py" finalize --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID" --launcher "$DELIVERY_PUBLISHER_LAUNCHER"
   - id: closeout
     type: shell
     strict: true

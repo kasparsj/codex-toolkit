@@ -29,7 +29,7 @@ ALLOWED_STATUS = {"rank": {"claimed", "rank_required", "plan_required"},
 def isolated_env(scratch: Path) -> dict[str, str]:
     home = (scratch / "home").resolve(); config = home / ".config" / "gh"
     home.mkdir(parents=True, exist_ok=True, mode=0o700); config.mkdir(parents=True, exist_ok=True)
-    keep = {key: os.environ[key] for key in ("PATH", "LANG", "LC_ALL", "CODEX_HOME") if key in os.environ}
+    keep = {key: os.environ[key] for key in ("PATH", "LANG", "LC_ALL") if key in os.environ}
     keep.update({"HOME": str(home), "GH_CONFIG_DIR": str(config), "DELIVERY_AGENT_ISOLATED": "1"})
     delivery.validate_agent_environment(keep, scratch)
     return keep
@@ -46,11 +46,22 @@ def run_agent(*, launcher: Path, kind: str, state: dict, skills_root: Path,
     delivery.require(worktree.is_dir(), "dedicated worktree missing")
     delivery.require(launcher.is_file() and os.access(launcher, os.X_OK), "agent launcher must be executable")
     skill = SKILL_FOR_KIND[kind]; skill_path = (skills_root / skill / "SKILL.md").resolve()
+    if kind == "implement" and state["requirements"]["plan"]:
+        from publisher_adapter import check_approval
+
+        _, verdict = check_approval(state, Path(state["publisher_launcher"]), "plan")
+        delivery.require(verdict == "approve", "current plan approval required before implementation")
     packet = {"schema_version": 1, "kind": kind, "delivery_id": state["delivery_id"],
               "repo": state["repo"], "issue": state.get("issue"), "status": state["status"],
               "skill": {"name": skill, "path": str(skill_path), "sha256": current_hashes[skill]},
               "worktree": str(worktree), "scratch": str(scratch),
+              "policy": state["policy_values"],
+              "plan": state.get("manifests", {}).get("plan", {}).get("value"),
+              "publication": state.get("publication", {}),
               "instruction": "Load the exact pinned skill. Keep GitHub read-only. Return only its delivery manifest."}
+    if kind in ("plan", "implement"):
+        packet["candidate_bundle"] = str(scratch / "candidate.bundle")
+        packet["candidate_ref"] = "refs/heads/delivery-candidate"
     completed = subprocess.run([str(launcher)], input=json.dumps(packet), text=True, capture_output=True,
                                cwd=worktree, env=isolated_env(scratch), check=False)
     if completed.returncode:

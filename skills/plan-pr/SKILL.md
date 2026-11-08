@@ -10,7 +10,7 @@ license: MIT
 
 Notify the requester of verified publication in the invoking surface. Accept `--notify @login` for a GitHub mention when an authorized publishing identity can notify that account. Use the publication reference for author and self-notification handling.
 
-When invoked by the controlled [GitHub delivery workflow](../../workflows/github-delivery/README.md), keep GitHub read-only and produce locally verified planning artifacts plus a schema-versioned `plan` manifest. Include exact artifact paths and hashes, plan revision, issue, and the inspected repository/ref/full SHA. The deterministic publisher, not this agent-facing skill, owns the one planning-only draft. A correction stays on the same issue and PR; identical retries keep the generation, while a recorded material artifact change advances it and requires fresh applicable approval.
+When invoked by the controlled [GitHub delivery workflow](../../workflows/github-delivery/README.md), keep GitHub read-only. Commit the verified planning artifacts and export the candidate bundle using the task packet. Return a schema-versioned `plan` manifest with the exact artifact paths and committed hashes, plan revision, issue, and inspected repository/ref/full SHA. Include the immediate base when it differs from the inspected baseline. The publisher owns the planning draft. A material artifact change advances the generation and requires fresh applicable approval.
 
 ## Establish the planning baseline
 

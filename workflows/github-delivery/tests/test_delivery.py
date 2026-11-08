@@ -19,10 +19,6 @@ delivery = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader
 SPEC.loader.exec_module(delivery)
 sys.modules["delivery"] = delivery
-PUBLISHER_SPEC = importlib.util.spec_from_file_location("github_delivery_publisher", MODULE.with_name("publisher.py"))
-publisher = importlib.util.module_from_spec(PUBLISHER_SPEC)
-assert PUBLISHER_SPEC.loader
-PUBLISHER_SPEC.loader.exec_module(publisher)
 
 
 POLICY = """\
@@ -289,6 +285,18 @@ class DeliveryTest(unittest.TestCase):
         corrected = coordinator.accept_manifest(retry, changed)
         self.assertEqual(corrected["manifests"]["plan"]["generation"], 2)
 
+    def test_implementation_verification_prose_does_not_advance_review_generation(self):
+        state = self.start()
+        coordinator = delivery.Coordinator(self.root / "state")
+        manifest = {"schema_version": 1, "kind": "implement", "delivery_id": state["delivery_id"],
+                    "repo": state["repo"], "result": {"candidate_sha": "d" * 40,
+                    "artifact_paths": ["src/change.py"], "verification": ["test passed"],
+                    "issue": 42, "base": {"repo": state["repo"], "ref": "main", "sha": "c" * 40}}}
+        coordinator.accept_manifest(state, manifest)
+        manifest["result"]["verification"] = ["test passed again"]
+        coordinator.accept_manifest(state, manifest)
+        self.assertEqual(state["manifests"]["implement"]["generation"], 1)
+
     def test_start_dispatches_exact_pinned_runner_with_managed_gate_inputs(self):
         state = self.start(); calls = []
         state["agent"] = {"launcher": "/tmp/launcher", "worktree": "/tmp/worktree",
@@ -315,53 +323,6 @@ class DeliveryTest(unittest.TestCase):
                 "current_step_index": 3, "error": "publisher failed"}), stderr="diagnostic")
         result = delivery.run_spec_kit(state, self.root / "state", runner=runner)
         self.assertEqual(result["run_id"], "failed-run"); self.assertEqual(result["error"], "publisher failed")
-
-    def test_real_publisher_requires_separate_credential_boundary(self):
-        with self.assertRaisesRegex(delivery.DeliveryError, "isolation"):
-            publisher.GitHubTransport(allowed_worktree_root=self.root, env={"GH_TOKEN": "x"})
-        transport = publisher.GitHubTransport(allowed_worktree_root=self.root,
-            env={"DELIVERY_PUBLISHER_ISOLATED": "1", "GH_TOKEN": "x"},
-            runner=lambda *a, **k: None)
-        self.assertEqual(transport.split_repo("github.test/acme/widget"),
-                         ("github.test", "acme", "widget"))
-        pr = {"number": 7, "head": {"ref": "codex/issue-42", "sha": "d" * 40},
-              "base": {"ref": "wrong"}, "body": "delivery-id: delivery-42",
-              "draft": True, "state": "open"}
-        transport.api = lambda *args, **kwargs: [pr]
-        with self.assertRaisesRegex(delivery.DeliveryError, "wrong-ref"):
-            transport.find_prs({"repo": "github.test/acme/widget", "head": "codex/issue-42",
-                "head_sha": "d" * 40, "base": "main", "delivery_id": "delivery-42",
-                "plan_revision": None})
-
-    def test_bundled_live_publisher_is_fail_closed(self):
-        fake_bin = self.root / "bin"; fake_bin.mkdir()
-        fake_git = fake_bin / "git"
-        fake_git.write_text("""#!/bin/sh
-if [ "$4" = "get-url" ]; then echo https://github.test/acme/widget.git; exit 0; fi
-if [ "$3" = "push" ]; then echo pushed; exit 0; fi
-exit 2
-"""); fake_git.chmod(0o700)
-        fake_gh = fake_bin / "gh"
-        fake_gh.write_text("""#!/usr/bin/env python3
-import json,sys
-args=' '.join(sys.argv[1:]); body=json.load(sys.stdin) if '--input' in sys.argv else {}
-if '?state=open&head=' in args: print('[]')
-elif '/pulls' in args and 'POST' in args:
- print(json.dumps({'number':5,'head':{'ref':body['head'],'sha':'b'*40},'base':{'ref':body['base'],'sha':'c'*40},'draft':True,'body':body['body'],'state':'open'}))
-else: raise SystemExit(2)
-"""); fake_gh.chmod(0o700)
-        packet = {"schema_version": 1, "action": "publish_plan", "delivery_id": "d",
-            "expected": {"repo": "github.test/acme/widget", "issue": 42, "head": "codex/plan-42",
-                "head_sha": "b" * 40, "base": "main", "base_sha": "c" * 40, "generation": 1,
-                "manifest_digest": "e" * 64, "plan_revision": "b" * 40},
-            "policy": {"digest": "f" * 64}, "prior_pr": None, "worktree": str(self.root)}
-        env = dict(os.environ); env.update({"PATH": str(fake_bin) + os.pathsep + env["PATH"],
-            "GH_TOKEN": "test", "DELIVERY_PUBLISHER_ISOLATED": "1", "DELIVERY_ENABLE_LIVE_WRITES": "1",
-            "DELIVERY_ALLOWED_WORKTREE_ROOT": str(self.root)})
-        completed = subprocess.run([sys.executable, str(MODULE.with_name("publisher.py"))],
-            input=json.dumps(packet), text=True, capture_output=True, env=env)
-        self.assertEqual(completed.returncode, 2, completed.stderr + completed.stdout)
-        result = json.loads(completed.stdout); self.assertIn("intentionally disabled", result["error"])
 
     def test_adapter_cli_runs_isolated_launcher_and_accepts_manifest(self):
         state = self.start(); launcher = self.root / "launcher.py"
@@ -430,6 +391,8 @@ else:
  out={'schema_version':1,'action':a,'pr':pr,'issue':{'number':p['issue'],'labels':[p['existing_review_label']]}}
 print(json.dumps(out))
 """); publisher_launcher.chmod(0o700)
+        state["publisher_launcher"] = str(publisher_launcher)
+        delivery.Coordinator(self.root / "state").save(state)
         base = ["--state-dir", str(self.root / "state"), "--repo", state["repo"], "--delivery-id", "e2e"]
         def command(script, args):
             result = subprocess.run([sys.executable, str(MODULE.with_name(script)), *args],

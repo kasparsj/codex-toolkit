@@ -18,10 +18,10 @@ The executable boundary is intentional:
 - The four skills remain usable interactively. `adapter.py` defines and enforces
   an explicit isolated launcher protocol for actual pinned-skill execution and
   schema-valid result acceptance.
-- Tests provide their own file-backed fake transport. `publisher.py` contains
-  non-runnable reference primitives for an eventual `gh`/`git` launcher, but
-  its executable entry point is unconditionally fail-closed. No bundled live
-  GitHub write path or live smoke is claimed.
+- `publisher.py` is the GitHub.com launcher. It takes an operator-allowlisted
+  repository and imports each candidate bundle into a fresh bare Git repository
+  in a protected publisher directory. Credentialed Git stays outside the agent
+  checkout and uses its own config, hooks, and remote settings.
 
 ## Repository policy
 
@@ -44,9 +44,12 @@ excluded_labels = ["blocked", "deferred"]
 
 [branches]
 default_parent = "main"
-allowed_parent_prefixes = ["main", "stack/"]
+allowed_parent_prefixes = ["stack/"]
 plan_template = "codex/plan-{issue}"
 implementation_template = "codex/issue-{issue}"
+
+[tracking]
+review_label = "status: review"
 
 [approvals.plan]
 minimum = 1
@@ -75,13 +78,15 @@ agent. The active claim is written before candidate selection, so one controlled
 host runs at most one issue per target repository.
 
 ```bash
+export DELIVERY_PUBLISHER_REPO=acme/widget
+export DELIVERY_PUBLISHER_ROOT="$protected_publisher_directory"
 python3 workflows/github-delivery/delivery.py start \
-  --state-dir "$trusted_state" --repo github.example/acme/widget \
+  --state-dir "$trusted_state" --repo acme/widget \
   --policy "$trusted_state/policy/delivery.toml" \
-  --policy-ref refs/remotes/origin/main --policy-sha "$policy_sha" \
+  --policy-ref refs/heads/main --policy-sha "$policy_sha" \
   --policy-digest "$policy_digest" --policy-fetched-at "$fetched_at" \
   --skills-root skills --agent-launcher /opt/delivery/agent-launcher \
-  --publisher-launcher /opt/delivery/publisher-launcher \
+  --publisher-launcher workflows/github-delivery/publisher.py \
   --worktree "$dedicated_worktree" --agent-scratch "$agent_scratch"
 ```
 
@@ -95,7 +100,7 @@ workflow. Each result uses this envelope and a kind-specific allowlist:
   "schema_version": 1,
   "kind": "rank",
   "delivery_id": "…",
-  "repo": "github.example/acme/widget",
+  "repo": "acme/widget",
   "result": {"winner": 42, "shortlist": [42, 31]}
 }
 ```
@@ -106,27 +111,10 @@ and invalid transitions. Identical retries retain the generation. A material
 correction creates the next generation and invalidates the corresponding old
 approval context.
 
-`start` dispatches the reviewed YAML through the pinned runner. The direct
-command below is diagnostic only; all path and gate values must come from the
-trusted wrapper:
-
-The wrapper atomically snapshots the reviewed YAML under
-`$trusted_state/runner/<delivery-id>/` and runs Spec Kit there. Its `.specify`
-engine state therefore stays in protected per-delivery storage and never dirties
-the skill source checkout. Resume verifies that snapshot is unchanged.
-
-```bash
-cd workflows/github-delivery
-uvx --from git+https://github.com/github/spec-kit.git@55264c2f2f2d1146f02abc543cb913dcdf1f9342 \
-  specify workflow run workflow.yaml --json \
-  --input state_dir="$trusted_state" --input repo="$repo" \
-  --input delivery_id="$delivery_id" \
-  --input agent_launcher="$agent_launcher" --input publisher_launcher="$publisher_launcher" \
-  --input worktree="$dedicated_worktree" \
-  --input agent_scratch="$agent_scratch" --input skills_root="$skills_root" \
-  --input run_rank=true \
-  --input plan_gate=true --input implementation_gate=true
-```
+`start` dispatches the reviewed YAML through the pinned runner. The wrapper
+atomically snapshots the reviewed YAML under `$trusted_state/runner/<delivery-id>/`
+and runs Spec Kit there. Its engine state stays in protected per-delivery storage.
+Resume verifies that snapshot is unchanged.
 
 The wrapper derives gate booleans and verdicts from trusted policy and fresh,
 paginated, exact-PR publisher-launcher receipts; an agent or operator cannot
@@ -144,15 +132,28 @@ validates its manifest, and enforces rank → plan → implement → closeout st
 order. The launcher may use its own non-GitHub agent credential (for example a
 dedicated `CODEX_HOME`) but must not regain publisher credentials.
 
+For `plan` and `implement`, the task packet provides `candidate_ref` and
+`candidate_bundle`. After committing and testing the candidate in the agent
+checkout, export the candidate and its history since the publication base:
+
+```bash
+git update-ref "$candidate_ref" "$candidate_sha"
+git bundle create "$candidate_bundle" "$candidate_ref" "^$base_sha"
+```
+
+The publication base must be an ancestor of the candidate. The plan manifest
+can report a separate `base` when its inspected baseline differs from its
+immediate PR base. For both stages, `artifact_paths` must match the candidate
+diff against that base. The plan also reports the SHA-256 of each artifact's
+committed bytes.
+
 The publisher launcher follows the same one-JSON-object stdin/stdout discipline
 for `publish_plan`, `publish_implementation`, `list_reviews`, and `finalize`.
 `publisher_adapter.py` derives expected repo/head/head SHA/base/provenance from
 trusted state, validates every response, requires proof that reviews were fully
-paginated, and performs the COMMENT receipt calculation itself. The included
-The pinned end-to-end test supplies a separate fake launcher without network
-access. The bundled `publisher.py` executable is intentionally disabled because
-a live implementation still needs a trusted separate clone and git config,
-fixed canonical remote/host, and fresh precondition reads before every write.
+paginated, and performs the COMMENT receipt calculation. The live launcher
+rechecks applicable approvals before GitHub writes. The pinned end-to-end
+test also supplies a fake launcher for credential-free local runs.
 
 ## Approval receipt
 
@@ -174,15 +175,12 @@ movement invalidate the applicable current receipt.
 
 ## Publisher and recovery
 
-Before each `push`, `create_pr`, `edit_pr`, `mark_ready`, or `track_issue`, the
-publisher atomically records the complete allowlisted payload. It then reads the
-result back. After an ambiguous response it queries exact repo/head/head SHA/base
-plus delivery and plan provenance, adopts one unique match, and blocks zero-risk
-recovery if several match. It resumes the first incomplete operation. It never
-creates labels, closes issues, merges, deploys, or writes outside the verified
-target. It marks ready only after the exact PR/head/base and required receipts
-are current, then updates and reads back an existing review project status or
-existing label.
+Before each publisher operation, the adapter atomically records the expected
+GitHub identity and candidate. The publisher reads each mutation back. After
+an ambiguous response it queries the exact repo, head, base, and provenance.
+It adopts a unique verified match or blocks on a conflict. It marks the PR
+ready after verifying the current head, base, and applicable approvals. It
+then adds and reads back the existing review label from policy.
 
 A hard kill can leave Spec Kit `running`. Do not edit engine files. First prove
 the old PID/process has exited, then run `recover`; it increments a linked
@@ -195,13 +193,12 @@ The agent launcher fails closed unless `DELIVERY_AGENT_ISOLATED=1`, `HOME` and
 `GITHUB_TOKEN`, `GITHUB_ENTERPRISE_TOKEN`, `SSH_AUTH_SOCK`, `GIT_ASKPASS`, and
 `SSH_ASKPASS` are absent. Launch the agent in a separate OS account/container
 with no mounted GitHub CLI config, SSH keys, credential-helper sockets, or
-publisher state, and ideally deny it network access. The publisher runs
-separately with the minimum credential and cannot consume agent prose. No such
-live launcher is bundled yet. It must use a trusted separate clone/config rather
-than entering the agent worktree, pin a canonical allowed host/repository, and
-re-read policy, base, head, and receipt preconditions before each mutation.
-Project-status mutation is not implemented; a future launcher must use an
-existing review label from policy or treat tracking as blocked.
+publisher state. Give the launcher only the read access it needs to inspect
+issues and PRs. Run the publisher with a GitHub CLI identity limited to the
+allowlisted repository. Set `DELIVERY_PUBLISHER_ROOT` to a private directory
+outside the agent checkout and scratch directory. The publisher verifies its
+authenticated identity against `publisher_id`. The bundled publisher tracks
+the issue through an existing review label.
 
 There is no portable stdlib mechanism that proves OS-level credential-helper,
 keychain, or container isolation on every platform. The environment validation

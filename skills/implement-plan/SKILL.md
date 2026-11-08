@@ -10,7 +10,7 @@ license: MIT
 
 An explicit invocation authorizes implementation, publication of one implementation PR, and a review-status update for the original issue when there is one. Honor equivalent instructions in prose. If publication is unspecified in an implicit request, deliver locally. `--local` permits read-only GitHub lookups and keeps all changes in the checkout. Honor any narrower publishing instructions. Merging, closing issues, and deploying are separate operations.
 
-When invoked by the controlled [GitHub delivery workflow](../../workflows/github-delivery/README.md), keep GitHub read-only and return a schema-versioned `implement` manifest for the locally verified candidate. Include the candidate full SHA, exact artifact paths, verification results, issue, and immediate base identity. The deterministic publisher alone converts the verified planning draft or creates one implementation draft, marks it ready, and updates existing issue tracking. A runner gate decision by itself never authorizes those mutations.
+When invoked by the controlled [GitHub delivery workflow](../../workflows/github-delivery/README.md), keep GitHub read-only. Export the verified candidate bundle using the task packet and return a schema-versioned `implement` manifest with the candidate full SHA, exact changed paths against the immediate base, verification results, issue, and immediate base identity. The publisher converts the verified planning draft or creates one implementation draft, marks it ready, and updates existing issue tracking after checking applicable approval evidence.
 
 ## Resolve the handoff
 

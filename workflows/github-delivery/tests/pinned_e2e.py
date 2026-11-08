@@ -92,6 +92,21 @@ print(json.dumps(out))
             sys.stderr.write(completed.stderr + completed.stdout); return completed.returncode
         result = json.loads(completed.stdout); assert result["runner"]["status"] == "paused", result
         assert result["runner"]["current_step_id"] == "implementation-review", result
+        stranded_run_id = result["runner_run_id"]
+        state_path, = (root / "state" / "repos").glob("*/deliveries/pinned-e2e/state.json")
+        state = json.loads(state_path.read_text())
+        state["runner_status"] = "running"
+        state["runner_pid"] = None
+        state_path.write_text(json.dumps(state))
+        recover = resume.copy()
+        recover[2] = "recover"
+        completed = subprocess.run(recover, text=True, capture_output=True)
+        if completed.returncode:
+            sys.stderr.write(completed.stderr + completed.stdout); return completed.returncode
+        result = json.loads(completed.stdout)
+        assert result["runner_run_id"] != stranded_run_id, result
+        assert result["runner"]["status"] == "paused", result
+        assert result["runner"]["current_step_id"] == "implementation-review", result
         completed = subprocess.run(resume, text=True, capture_output=True)
         if completed.returncode:
             sys.stderr.write(completed.stderr + completed.stdout); return completed.returncode

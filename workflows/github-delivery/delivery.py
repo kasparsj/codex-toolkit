@@ -112,9 +112,20 @@ def validate_repo(repo: str) -> None:
     require(bool(REPO.fullmatch(repo)), "repo must be [host/]owner/name")
 
 
+def repo_identity(repo: str) -> str:
+    validate_repo(repo)
+    repo = repo.lower()
+    return f"github.com/{repo}" if repo.count("/") == 1 else repo
+
+
 def validate_ref(ref: str) -> None:
     require(bool(ref) and not ref.startswith("-") and ".." not in ref and " " not in ref,
             f"unsafe ref: {ref!r}")
+
+
+def validate_delivery_id(delivery_id: str) -> None:
+    require(bool(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,79}", delivery_id)),
+            "invalid delivery ID")
 
 
 def load_policy(path: Path, *, expected_digest: str, source_ref: str,
@@ -185,7 +196,8 @@ def skill_hashes(skills_root: Path) -> dict[str, str]:
 
 def adapter_hashes() -> dict[str, str]:
     root = Path(__file__).resolve().parent
-    names = ("delivery.py", "adapter.py", "publisher_adapter.py", "publisher.py", "workflow.yaml")
+    names = ("delivery.py", "adapter.py", "publisher_adapter.py", "publisher.py",
+             "trusted_git.py", "workflow.yaml")
     return {name: digest_bytes((root / name).read_bytes()) for name in names}
 
 
@@ -197,7 +209,7 @@ def validate_manifest(manifest: dict[str, Any], kind: str) -> None:
     require(isinstance(manifest.get("result"), dict), "manifest result object required")
     allowed = {
         "rank": {"winner", "no_candidate", "shortlist"},
-        "plan": {"artifact_paths", "artifact_hashes", "plan_revision", "issue", "baseline"},
+        "plan": {"artifact_paths", "artifact_hashes", "plan_revision", "issue", "baseline", "base"},
         "implement": {"candidate_sha", "artifact_paths", "verification", "issue", "base"},
         "closeout": {"status", "head_sha", "base_sha", "checks"},
     }[kind]
@@ -261,6 +273,7 @@ def run_spec_kit(state: dict[str, Any], state_dir: Path, *, run_id: str | None =
                  runner=subprocess.run) -> dict[str, Any]:
     """Dispatch only the reviewed local YAML through the exact pinned runner."""
     workflow_dir = Path(__file__).resolve().parent
+    validate_delivery_id(state["delivery_id"])
     runner_dir = state_dir.resolve() / "runner" / state["delivery_id"]
     runner_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     trusted_workflow = runner_dir / "workflow.yaml"
@@ -281,6 +294,16 @@ def run_spec_kit(state: dict[str, Any], state_dir: Path, *, run_id: str | None =
         argv = base + ["resume", run_id, "--json"]
     else:
         argv = base + ["run", "workflow.yaml", "--json"]
+        manifests = state.get("manifests", {})
+        publication = state.get("publication", {})
+        status = state["status"]
+        plan_gate = state["requirements"]["plan"] > 0 and status in (
+            "rank_required", "plan_required", "plan_review",
+        )
+        implementation_gate = state["requirements"]["implementation"] > 0 and status in (
+            "rank_required", "plan_required", "plan_review", "implementation_required",
+            "implementation_review",
+        )
         for key, value in (("state_dir", str(state_dir.resolve())), ("repo", state["repo"]),
                            ("delivery_id", state["delivery_id"]),
                            ("adapter_dir", str(workflow_dir)),
@@ -290,8 +313,13 @@ def run_spec_kit(state: dict[str, Any], state_dir: Path, *, run_id: str | None =
                            ("agent_scratch", state["agent"]["scratch"]),
                            ("skills_root", state["agent"]["skills_root"]),
                            ("run_rank", str(state.get("issue") is None).lower()),
-                           ("plan_gate", str(state["requirements"]["plan"] > 0).lower()),
-                           ("implementation_gate", str(state["requirements"]["implementation"] > 0).lower())):
+                           ("run_plan", str("plan" not in manifests).lower()),
+                           ("publish_plan", str("plan" not in publication).lower()),
+                           ("run_implementation", str("implement" not in manifests).lower()),
+                           ("publish_implementation", str("implementation" not in publication).lower()),
+                           ("finalize", str("final" not in publication).lower()),
+                           ("plan_gate", str(plan_gate).lower()),
+                           ("implementation_gate", str(implementation_gate).lower())):
             argv += ["--input", f"{key}={value}"]
     if plan_verdict: argv += ["--input", f"plan_verdict={plan_verdict}"]
     if implementation_verdict: argv += ["--input", f"implementation_verdict={implementation_verdict}"]
@@ -337,9 +365,10 @@ class Coordinator:
         self.root = state_dir.resolve()
 
     def _repo_dir(self, repo: str) -> Path:
-        return self.root / "repos" / digest_bytes(repo.encode())
+        return self.root / "repos" / digest_bytes(repo_identity(repo).encode())
 
     def _delivery_path(self, repo: str, delivery_id: str) -> Path:
+        validate_delivery_id(delivery_id)
         return self._repo_dir(repo) / "deliveries" / delivery_id / "state.json"
 
     def start(self, *, repo: str, issue: int | None, policy: dict[str, Any],
@@ -354,6 +383,9 @@ class Coordinator:
                     raise DeliveryError(f"active delivery already claimed: {active['delivery_id']}")
             stable = delivery_id or digest_bytes(canonical_json({"repo": repo, "issue": issue,
                 "policy": policy["_source"]["digest"], "nonce": secrets.token_hex(8)}))[:24]
+            validate_delivery_id(stable)
+            require(issue is None or type(issue) is int and issue > 0, "invalid issue number")
+            require(not self._delivery_path(repo, stable).exists(), "delivery ID already exists")
             claim = {"delivery_id": stable, "repo": repo, "issue": None, "status": "claimed",
                      "claimed_at": utc_now()}
             atomic_json(active_path, claim)  # durable claim precedes candidate selection
@@ -394,10 +426,17 @@ class Coordinator:
         require(manifest["repo"] == state["repo"], "manifest repository mismatch")
         manifest_digest = digest_bytes(canonical_json(manifest))
         previous = state.get("manifests", {}).get(kind)
-        generation = previous["generation"] if previous and previous["digest"] == manifest_digest else (
+        material = dict(manifest["result"])
+        if kind == "implement":
+            material.pop("verification", None)
+        if kind in ("plan", "implement"):
+            material["artifact_paths"] = sorted(material.get("artifact_paths", []))
+        material_digest = digest_bytes(canonical_json(material))
+        generation = previous["generation"] if previous and previous.get("material_digest") == material_digest else (
             (previous["generation"] + 1) if previous else 1)
         state.setdefault("manifests", {})[kind] = {
-            "digest": manifest_digest, "generation": generation, "value": manifest,
+            "digest": manifest_digest, "material_digest": material_digest,
+            "generation": generation, "value": manifest,
             "accepted_at": utc_now(),
         }
         if kind == "rank":
@@ -418,7 +457,13 @@ class Coordinator:
             minimum = state["requirements"]["implementation"]
             state["status"] = "implementation_review" if minimum else "publication_pending"
         else:
-            verdict = manifest["result"].get("status")
+            result = manifest["result"]
+            published = state.get("publication", {}).get("final", {}).get("pr")
+            if published:
+                require(result.get("head_sha") == published["head_sha"]
+                        and result.get("base_sha") == published["base_sha"],
+                        "closeout revisions differ from verified publication")
+            verdict = result.get("status")
             require(verdict in ("READY", "WAITING", "BLOCKED"), "invalid closeout status")
             state["status"] = {"READY": "review_ready", "WAITING": "ci_waiting", "BLOCKED": "blocked"}[verdict]
         state["history"].append({"event": f"{kind}_manifest", "generation": generation,
