@@ -1,12 +1,18 @@
 ---
-name: plan-next-issue
-description: Rank a GitHub repository's open issues, choose the best eligible issue to work on next, and use plan-pr to open a draft planning PR for human review. Use when asked to pick and plan the next issue from a backlog.
+name: next-issue
+description: Rank a GitHub backlog and select the best eligible issue to work on next. Use when asked to choose the next issue, optionally review it with issue-review or open a draft planning PR with plan-pr.
 license: MIT
 ---
 
-# Plan the next issue
+# Choose the next issue
 
-`$plan-next-issue [<repo-url-or-owner/repo>]` selects and plans one open issue. Use the current checkout's GitHub repository when the target is omitted and unambiguous. Honor a requested focus, milestone, or base branch. `--rank-only` returns the shortlist and stops. `--notify @login` forwards an explicit notification recipient to `plan-pr`. A ranking request alone stays read-only.
+`$next-issue [<repo-url-or-owner/repo>] [--rank | --review | --plan]` selects one open issue. Use the current checkout's GitHub repository when the target is omitted and unambiguous. Honor a requested focus, milestone, or base branch.
+
+- `--rank` (default) returns the shortlist and winner in chat. This mode is read-only.
+- `--review` runs `issue-review` for the winner and returns its verdict. The review may write a local report. Keep GitHub read-only.
+- `--plan` runs `plan-pr` for the winner and authorizes one draft planning PR. Use `--notify @login` with this mode to forward an explicit notification recipient to `plan-pr`.
+
+The modes are mutually exclusive. If the invocation supplies conflicting mode flags or uses `--notify` outside `--plan`, report the usage error and stop.
 
 ## Gather the candidate set
 
@@ -29,8 +35,16 @@ Rank eligible issues using these criteria in order. Apply repo-specific priority
 
 Report a short ranked shortlist with evidence, the winner, and any consequential exclusions or coverage limits. Keep the rationale suitable for the repo audience before including it in a plan or PR.
 
-## Hand off once
+## Run the selected mode
 
-For a publication run, re-read the winning issue and relevant PR state immediately before handoff. If eligibility changed, re-rank using fresh evidence. Load and follow the installed `plan-pr` skill in the same session. If it is not surfaced by name, use the adjacent [plan-pr skill](../plan-pr/SKILL.md) when both are installed together. If it is unavailable, report the selected issue and the exact `$plan-pr <issue-url>` handoff.
+For `--rank`, stop after reporting the shortlist and winner. For either handoff, re-read the winning issue and relevant PR state immediately before handing it off. If eligibility changed, re-rank using fresh evidence.
 
-Pass the canonical issue URL, target base, evidence for choosing it, and explicit notification recipient if provided. A joint invocation authorizes `plan-pr` to publish one draft for the winner. Let `plan-pr` choose its planning depth, produce any useful mockups, and own publication and notification. Respect any clarification or publication blocker it finds. Report the resulting draft URL or blocker alongside the shortlist. Leave issue assignment, labels, comments, and state alone.
+### Review
+
+Load and follow the installed `issue-review` skill in the same session. Pass the canonical issue URL and target base as the review revision. Omit publication flags. If the skill is unavailable, report the selected issue, the missing dependency, and the `$issue-review <issue-url>` handoff with the target base. Return the verdict and local report path if produced, or the blocker, alongside the shortlist. Stop after reviewing the selected issue, regardless of verdict.
+
+### Plan
+
+Load and follow the installed `plan-pr` skill in the same session. If it is not surfaced by name, use the adjacent [plan-pr skill](../plan-pr/SKILL.md) when both are installed together. If it is unavailable, report the selected issue, the missing dependency, and the `$plan-pr <issue-url>` handoff with the target base and any requested notification recipient.
+
+Pass the canonical issue URL, target base, evidence for choosing it, and explicit notification recipient if provided. Let `plan-pr` choose its planning depth, produce any useful mockups, and own publication and notification. Respect any clarification or publication blocker it finds. Report the resulting draft URL or blocker alongside the shortlist. Leave issue assignment, labels, comments, and state alone.

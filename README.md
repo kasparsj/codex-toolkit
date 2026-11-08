@@ -48,10 +48,12 @@ You can also supply a chat link or ID to hand off work from a different chat.
 
 Use `--local` to keep the plan in the checkout. [Read the skill](skills/plan-pr/SKILL.md)
 
-## Plan the next issue
+## Choose the next issue
 
-`$plan-next-issue` ranks the open issues in a GitHub repository, selects one eligible issue, and runs `plan-pr` to prepare a draft for human review. Install both skills together. Use `--rank-only` to see the shortlist.
+`$next-issue` ranks the open issues in a GitHub repository and selects the best eligible candidate.
 
-> $plan-next-issue owner/repo
+- `$next-issue owner/repo --rank` reports the shortlist and winner. Ranking is the default when you omit the mode.
+- `$next-issue owner/repo --review` runs the separately installed `issue-review` skill on the winner and stops after the review.
+- `$next-issue owner/repo --plan` uses `plan-pr` to open a draft planning PR for the winner.
 
-[Read the skill](skills/plan-next-issue/SKILL.md)
+[Read the skill](skills/next-issue/SKILL.md)

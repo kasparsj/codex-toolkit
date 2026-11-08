@@ -34,7 +34,7 @@ Honor a user-selected or repo-required planning workflow. Read a named workflow'
 
 Use the repo's established paths and artifact formats. Otherwise write `docs/plans/issue-<number>-<slug>.md` or `docs/plans/<slug>.md` for a brief. A plan must stand on its own and link the issue when applicable. Include the intended outcome and user or operator flow where relevant, scope and deferrals, code or test anchors, ordered implementation steps, testable acceptance criteria and verification, risks and recovery where relevant, and decisions for the reviewer. Split verification into a companion test spec when the repo expects it or the plan warrants it. Update a planning index only when the repo uses one.
 
-When called by `plan-next-issue`, carry the verified reason for selecting the issue into the plan or PR summary.
+When called by `next-issue --plan`, carry the verified reason for selecting the issue into the plan or PR summary.
 
 When a visual artifact helps reviewers decide on a changed screen, layout, state, or interaction, read [Mockup rendering](references/mockups.md). Explain the omission when a mockup could reasonably be expected. Keep implementation, workflow/configuration changes, and local planner state out of the artifact set.
 
