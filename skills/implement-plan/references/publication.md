@@ -2,6 +2,8 @@
 
 Use this procedure when publication is authorized. Bind PR requests to the verified PR repository and push only to its confirmed remote or an authorized fork. Bind issue reads, writes, and read-back to the host, owner, repository, and number in the verified canonical issue URL, independently of the PR repository. For project status, verify that the project item belongs to that issue. Re-read the original issue when applicable, the target base, and relevant PRs immediately before writing. Treat a moved base or changed draft head as a reason to inspect the new revision and reverify affected checks.
 
+For the controlled [GitHub delivery workflow](../../../workflows/github-delivery/README.md), the shared deterministic publisher replaces direct agent publication. The agent has no GitHub write credentials and supplies only a validated local candidate manifest. The publisher records and reads back exact push/create/edit/ready/tracking intents, converts the same planning draft only when safe or creates one implementation draft, and may update only an existing review project status or label. It never creates a label, closes an issue, merges, or deploys. Preserve the ordinary interactive procedure below outside that workflow.
+
 ## Choose the PR
 
 - **Resume publication** — Identify the same implementation by the original PR identity for a conversion, or by a verified head and plan provenance for a separate PR. If the published head, base, issue reference, and verification evidence match, continue at the first incomplete publication or tracking step without repeating implementation. If a push succeeded before metadata was updated, recover the reviewed plan from its pinned link or verified history and reconcile the existing PR before attempting a new one.

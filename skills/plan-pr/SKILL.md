@@ -10,6 +10,8 @@ license: MIT
 
 Notify the requester of verified publication in the invoking surface. Accept `--notify @login` for a GitHub mention when an authorized publishing identity can notify that account. Use the publication reference for author and self-notification handling.
 
+When invoked by the controlled [GitHub delivery workflow](../../workflows/github-delivery/README.md), keep GitHub read-only and produce locally verified planning artifacts plus a schema-versioned `plan` manifest. Include exact artifact paths and hashes, plan revision, issue, and the inspected repository/ref/full SHA. The deterministic publisher, not this agent-facing skill, owns the one planning-only draft. A correction stays on the same issue and PR; identical retries keep the generation, while a recorded material artifact change advances it and requires fresh applicable approval.
+
 ## Establish the planning baseline
 
 - Resolve the target GitHub host, repository, and intended base branch. For an issue input, resolve its canonical URL and verify that the checkout and remote match its repository. A bare issue number refers to the unambiguous target checkout. For a written brief without an issue, verify the checkout and remote against the intended repository and record `Original issue: None` in the handoff. If they differ, identify the correct checkout or fetch it in isolation. Preserve the active branch as the base when it is the intended project branch, honor an explicit base, and use the target default branch for a fresh checkout. Record the base and inspected commit. Resolve a detached or unpublished base before publishing. Read the target repo's planning, design, and contribution guidance.

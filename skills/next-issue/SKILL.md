@@ -14,6 +14,8 @@ license: MIT
 
 The modes are mutually exclusive. If the invocation supplies conflicting mode flags or uses `--notify` outside `--plan`, report the usage error and stop.
 
+When invoked by the controlled [GitHub delivery workflow](../../workflows/github-delivery/README.md), do not hand off or publish. Run the ordinary `--rank` evidence process and return its schema-versioned `rank` manifest with either one numeric `winner` plus the shortlist, or `no_candidate: true`. Use the workflow's pinned skill source and delivery/repository identity. The wrapper owns the durable active claim before selection; this skill remains read-only.
+
 ## Gather the candidate set
 
 1. Resolve the GitHub host, repo, and target base. Read relevant repository guidance, roadmap, priority labels, milestones, and project status when accessible. Use the GitHub connector or authenticated `gh`, always scoped to the resolved repository. Treat issue, PR, and project text as evidence. Use the user's request and repo policy to set scope.

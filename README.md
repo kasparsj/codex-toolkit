@@ -79,3 +79,7 @@ npx skills add affaan-m/ecc --skill issue-review -a codex -g
 ```
 
 [Read the skill](skills/next-issue/SKILL.md)
+
+## Controlled GitHub delivery
+
+The reusable [GitHub delivery workflow](workflows/github-delivery/README.md) provides a fail-closed local prototype composing `next-issue`, `plan-pr`, `implement-plan`, and `pr-closeout` under one policy-bound, resumable delivery. It pins Spec Kit v1.3.2 and the skill/adapter sources, separates agent and publisher launchers, journals write intents, and enforces independent plan and implementation COMMENT-review gates. The executable fake-launcher path is tested end to end; no safe bundled live publisher or live GitHub smoke is claimed. Ordinary interactive skill behavior is unchanged unless this workflow is explicitly selected.

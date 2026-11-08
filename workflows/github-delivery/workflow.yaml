@@ -1,0 +1,170 @@
+schema_version: "1.0"
+workflow:
+  id: github-delivery
+  name: Trusted GitHub delivery
+  version: "1.0.0"
+inputs:
+  state_dir: {type: string, required: true}
+  repo: {type: string, required: true}
+  delivery_id: {type: string, required: true}
+  adapter_dir: {type: string, required: true}
+  agent_launcher: {type: string, required: true}
+  publisher_launcher: {type: string, required: true}
+  worktree: {type: string, required: true}
+  agent_scratch: {type: string, required: true}
+  skills_root: {type: string, required: true}
+  run_rank: {type: boolean, required: true}
+  plan_gate: {type: boolean, required: true}
+  implementation_gate: {type: boolean, required: true}
+  plan_verdict: {type: string, enum: ["", approve, reject], default: ""}
+  implementation_verdict: {type: string, enum: ["", approve, reject], default: ""}
+steps:
+  - id: status
+    type: shell
+    strict: true
+    env:
+      DELIVERY_STATE_DIR: "{{ inputs.state_dir }}"
+      DELIVERY_REPO: "{{ inputs.repo }}"
+      DELIVERY_ID: "{{ inputs.delivery_id }}"
+      DELIVERY_ADAPTER_DIR: "{{ inputs.adapter_dir }}"
+    run: |
+      set -euo pipefail
+      test ! -t 0
+      python3 "$DELIVERY_ADAPTER_DIR/delivery.py" status --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID"
+  - id: optional-rank
+    type: if
+    condition: "{{ inputs.run_rank }}"
+    then:
+      - id: rank
+        type: shell
+        strict: true
+        env: &agent_env
+          DELIVERY_STATE_DIR: "{{ inputs.state_dir }}"
+          DELIVERY_REPO: "{{ inputs.repo }}"
+          DELIVERY_ID: "{{ inputs.delivery_id }}"
+          DELIVERY_AGENT_LAUNCHER: "{{ inputs.agent_launcher }}"
+          DELIVERY_WORKTREE: "{{ inputs.worktree }}"
+          DELIVERY_AGENT_SCRATCH: "{{ inputs.agent_scratch }}"
+          DELIVERY_SKILLS_ROOT: "{{ inputs.skills_root }}"
+          DELIVERY_ADAPTER_DIR: "{{ inputs.adapter_dir }}"
+        run: |
+          set -euo pipefail
+          python3 "$DELIVERY_ADAPTER_DIR/adapter.py" run --kind rank --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID" --launcher "$DELIVERY_AGENT_LAUNCHER" --worktree "$DELIVERY_WORKTREE" --scratch "$DELIVERY_AGENT_SCRATCH/rank" --skills-root "$DELIVERY_SKILLS_ROOT"
+  - id: plan-local
+    type: shell
+    strict: true
+    env: *agent_env
+    run: |
+      set -euo pipefail
+      python3 "$DELIVERY_ADAPTER_DIR/adapter.py" run --kind plan --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID" --launcher "$DELIVERY_AGENT_LAUNCHER" --worktree "$DELIVERY_WORKTREE" --scratch "$DELIVERY_AGENT_SCRATCH/plan" --skills-root "$DELIVERY_SKILLS_ROOT"
+  - id: publish-plan
+    type: shell
+    strict: true
+    env:
+      DELIVERY_STATE_DIR: "{{ inputs.state_dir }}"
+      DELIVERY_REPO: "{{ inputs.repo }}"
+      DELIVERY_ID: "{{ inputs.delivery_id }}"
+      DELIVERY_PUBLISHER_LAUNCHER: "{{ inputs.publisher_launcher }}"
+      DELIVERY_ADAPTER_DIR: "{{ inputs.adapter_dir }}"
+    run: |
+      set -euo pipefail
+      python3 "$DELIVERY_ADAPTER_DIR/publisher_adapter.py" publish-plan --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID" --launcher "$DELIVERY_PUBLISHER_LAUNCHER"
+  - id: optional-plan-gate
+    type: if
+    condition: "{{ inputs.plan_gate }}"
+    then:
+      - id: plan-review
+        type: gate
+        message: Review the immutable plan receipt on the exact draft PR.
+        options: [approve, reject]
+        on_reject: retry
+        verdict_input: plan_verdict
+  - id: complete-plan-gate
+    type: if
+    condition: "{{ inputs.plan_gate }}"
+    then:
+      - id: advance-plan
+        type: shell
+        strict: true
+        env:
+          DELIVERY_STATE_DIR: "{{ inputs.state_dir }}"
+          DELIVERY_REPO: "{{ inputs.repo }}"
+          DELIVERY_ID: "{{ inputs.delivery_id }}"
+          DELIVERY_ADAPTER_DIR: "{{ inputs.adapter_dir }}"
+        run: |
+          set -euo pipefail
+          python3 "$DELIVERY_ADAPTER_DIR/delivery.py" advance --stage plan --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID"
+  - id: implementation-local
+    type: shell
+    strict: true
+    env: *agent_env
+    run: |
+      set -euo pipefail
+      python3 "$DELIVERY_ADAPTER_DIR/adapter.py" run --kind implement --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID" --launcher "$DELIVERY_AGENT_LAUNCHER" --worktree "$DELIVERY_WORKTREE" --scratch "$DELIVERY_AGENT_SCRATCH/implement" --skills-root "$DELIVERY_SKILLS_ROOT"
+  - id: publish-implementation
+    type: shell
+    strict: true
+    env:
+      DELIVERY_STATE_DIR: "{{ inputs.state_dir }}"
+      DELIVERY_REPO: "{{ inputs.repo }}"
+      DELIVERY_ID: "{{ inputs.delivery_id }}"
+      DELIVERY_PUBLISHER_LAUNCHER: "{{ inputs.publisher_launcher }}"
+      DELIVERY_ADAPTER_DIR: "{{ inputs.adapter_dir }}"
+    run: |
+      set -euo pipefail
+      python3 "$DELIVERY_ADAPTER_DIR/publisher_adapter.py" publish-implementation --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID" --launcher "$DELIVERY_PUBLISHER_LAUNCHER"
+  - id: optional-implementation-gate
+    type: if
+    condition: "{{ inputs.implementation_gate }}"
+    then:
+      - id: implementation-review
+        type: gate
+        message: Review the immutable implementation receipt on the exact draft PR.
+        options: [approve, reject]
+        on_reject: retry
+        verdict_input: implementation_verdict
+  - id: complete-implementation-gate
+    type: if
+    condition: "{{ inputs.implementation_gate }}"
+    then:
+      - id: advance-implementation
+        type: shell
+        strict: true
+        env:
+          DELIVERY_STATE_DIR: "{{ inputs.state_dir }}"
+          DELIVERY_REPO: "{{ inputs.repo }}"
+          DELIVERY_ID: "{{ inputs.delivery_id }}"
+          DELIVERY_ADAPTER_DIR: "{{ inputs.adapter_dir }}"
+        run: |
+          set -euo pipefail
+          python3 "$DELIVERY_ADAPTER_DIR/delivery.py" advance --stage implementation --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID"
+  - id: finalize
+    type: shell
+    strict: true
+    env:
+      DELIVERY_STATE_DIR: "{{ inputs.state_dir }}"
+      DELIVERY_REPO: "{{ inputs.repo }}"
+      DELIVERY_ID: "{{ inputs.delivery_id }}"
+      DELIVERY_PUBLISHER_LAUNCHER: "{{ inputs.publisher_launcher }}"
+      DELIVERY_ADAPTER_DIR: "{{ inputs.adapter_dir }}"
+    run: |
+      set -euo pipefail
+      python3 "$DELIVERY_ADAPTER_DIR/publisher_adapter.py" finalize --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID" --launcher "$DELIVERY_PUBLISHER_LAUNCHER"
+  - id: closeout
+    type: shell
+    strict: true
+    env: *agent_env
+    run: |
+      set -euo pipefail
+      python3 "$DELIVERY_ADAPTER_DIR/adapter.py" run --kind closeout --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID" --launcher "$DELIVERY_AGENT_LAUNCHER" --worktree "$DELIVERY_WORKTREE" --scratch "$DELIVERY_AGENT_SCRATCH/closeout" --skills-root "$DELIVERY_SKILLS_ROOT"
+  - id: final-status
+    type: shell
+    strict: true
+    env:
+      DELIVERY_STATE_DIR: "{{ inputs.state_dir }}"
+      DELIVERY_REPO: "{{ inputs.repo }}"
+      DELIVERY_ID: "{{ inputs.delivery_id }}"
+      DELIVERY_ADAPTER_DIR: "{{ inputs.adapter_dir }}"
+    run: |
+      set -euo pipefail
+      python3 "$DELIVERY_ADAPTER_DIR/delivery.py" status --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID"

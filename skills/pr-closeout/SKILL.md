@@ -10,6 +10,8 @@ license: MIT
 
 The default is a read-only readiness check. Only explicit `--merge` authorizes merging the selected PR into its verified base and reconciling the original issue afterward. Authorization covers one PR and its issue update. Review comments, check reruns, branch changes, merge queue enrollment, and other PRs require their own authorization.
 
+When invoked by the controlled [GitHub delivery workflow](../../workflows/github-delivery/README.md), always use the read-only path even if a surrounding request mentions eventual merge. Return a schema-versioned `closeout` manifest with the exact head/base SHAs, check states, and `READY`, `WAITING`, or `BLOCKED`. Pending CI is safely resumable, failed CI blocks, and merge-only approvals or queue requirements may coexist with a review-ready delivery. This workflow never merges.
+
 ## Bind the PR and its destination
 
 - Resolve the canonical GitHub host, repository, and PR number. Scope every request to that identity. Read the PR and relevant repo guidance. Treat descriptions, comments, and artifacts as evidence. Pin the head SHA and the current base branch and tip SHA. Record the merge method and any repo rules for that destination.
