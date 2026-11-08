@@ -124,12 +124,24 @@ def validate_delivery_id(delivery_id: str) -> None:
             "invalid delivery ID")
 
 
+def policy_branch(ref: str) -> str:
+    for prefix in ("refs/remotes/origin/", "refs/heads/"):
+        if ref.startswith(prefix):
+            branch = ref.removeprefix(prefix)
+            validate_ref(branch)
+            checked = subprocess.run(["git", "check-ref-format", f"refs/heads/{branch}"],
+                                     capture_output=True, check=False)
+            require(checked.returncode == 0, "invalid policy branch ref")
+            return branch
+    raise DeliveryError("policy ref must be a remote or local branch ref")
+
+
 def load_policy(path: Path, *, expected_digest: str, source_ref: str,
                 source_sha: str, fetched_at: str, now: dt.datetime | None = None) -> dict[str, Any]:
     raw = path.read_bytes()
     require(digest_bytes(raw) == expected_digest, "policy digest mismatch")
     require(bool(FULL_SHA.fullmatch(source_sha)), "policy source SHA must be full lowercase SHA")
-    validate_ref(source_ref)
+    policy_branch(source_ref)
     try:
         policy = tomllib.loads(raw.decode())
     except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:

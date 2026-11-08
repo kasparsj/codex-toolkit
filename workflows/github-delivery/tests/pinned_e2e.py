@@ -170,6 +170,11 @@ print(json.dumps({'schema_version':1,'kind':p['kind'],'delivery_id':p['delivery_
             "--skills-root", str(ROOT / "skills"), "--agent-launcher", str(ranker),
             "--publisher-launcher", "/usr/bin/false", "--worktree", str(root),
             "--agent-scratch", str(root / "empty-agent-scratch"), "--no-dispatch"]
+        invalid_ref = no_candidate.copy()
+        invalid_ref[invalid_ref.index("--policy-ref") + 1] = "main"
+        rejected = subprocess.run(invalid_ref, text=True, capture_output=True)
+        assert rejected.returncode == 2 and "policy ref must be" in rejected.stdout
+        assert not list((root / "empty-state").glob("repos/*/active.json"))
         completed = subprocess.run(no_candidate, text=True, capture_output=True)
         if completed.returncode:
             sys.stderr.write(completed.stderr + completed.stdout); return completed.returncode

@@ -38,15 +38,6 @@ def repo_parts(repo: str) -> tuple[str, str, str]:
     return host, owner, name
 
 
-def policy_branch(ref: str) -> str:
-    for prefix in ("refs/remotes/origin/", "refs/heads/"):
-        if ref.startswith(prefix):
-            branch = ref.removeprefix(prefix)
-            delivery.validate_ref(branch)
-            return branch
-    raise delivery.DeliveryError("policy ref must be a remote or local branch ref")
-
-
 class GitHubClient:
     def __init__(self, env: dict[str, str] | None = None, runner=subprocess.run):
         self.env = dict(env or os.environ)
@@ -155,7 +146,7 @@ class Publisher:
             and all(character in "0123456789abcdef" for character in digest),
             "invalid policy digest",
         )
-        branch = policy_branch(policy.get("ref", ""))
+        branch = delivery.policy_branch(policy.get("ref", ""))
         ref = self.client.api(
             "GET", self.repo,
             f"/repos/{{owner}}/{{repo}}/git/ref/heads/{quote(branch, safe='/')}",
