@@ -105,8 +105,22 @@ def publish(state: dict, launcher: Path, stage: str, save=lambda _state: None) -
     kind = "plan" if stage == "plan" else "implement"
     manifest = state["manifests"][kind]["value"]["result"]
     bundle = Path(state["agent"]["scratch"]) / kind / "candidate.bundle"
+    correction = state.get("corrections", {}).get(kind)
+    supersedes_pr = None
+    supersedes_digest = None
+    if correction is not None:
+        delivery.require(isinstance(correction, dict), f"{stage} correction record is invalid")
+        supersedes_pr = correction.get("pr")
+        supersedes_digest = correction.get("manifest_digest")
+        delivery.require(isinstance(supersedes_pr, dict), f"{stage} correction PR is invalid")
+        delivery.require(
+            isinstance(supersedes_digest, str) and len(supersedes_digest) == 64,
+            f"{stage} correction manifest digest is invalid",
+        )
     packet = {**packet_for(state, f"publish_{stage}"), "expected": expected,
               "prior_pr": state.get("publication", {}).get("plan", {}).get("pr"),
+              "supersedes_pr": supersedes_pr,
+              "supersedes_manifest_digest": supersedes_digest,
               "candidate": {"bundle_path": str(bundle), "paths": manifest["artifact_paths"],
                             "hashes": manifest.get("artifact_hashes")},
               "plan_approval": approval_request(state, "plan") if stage == "implementation" else None}
@@ -114,6 +128,11 @@ def publish(state: dict, launcher: Path, stage: str, save=lambda _state: None) -
                              lambda result: validate_pr(result.get("pr", {}), expected, draft=True))
     state.setdefault("publication", {})[stage] = {"pr": response["pr"], "published_at": delivery.utc_now(),
         "generation": expected["generation"], "manifest_digest": expected["manifest_digest"]}
+    if correction is not None:
+        state["corrections"].pop(kind, None)
+        if not state["corrections"]:
+            state.pop("corrections")
+    save(state)
     return state
 
 
@@ -124,6 +143,29 @@ def approval_context(state: dict, stage: str) -> tuple[str, dict, str]:
     manifest = state["manifests"][kind]
     result = manifest["value"]["result"]
     pr = publication["pr"]
+    expected_head = result["plan_revision" if stage == "plan" else "candidate_sha"]
+    delivery.require(publication.get("generation") == manifest["generation"],
+                     f"{stage} publication generation is stale")
+    delivery.require(publication.get("manifest_digest") == manifest["digest"],
+                     f"{stage} publication manifest is stale")
+    delivery.require(pr.get("head_sha") == expected_head,
+                     f"{stage} publication head is stale")
+    if stage == "plan":
+        paths = result.get("artifact_paths")
+        artifact_hashes = result.get("artifact_hashes")
+        delivery.require(
+            isinstance(paths, list)
+            and paths
+            and isinstance(artifact_hashes, dict)
+            and set(artifact_hashes) == set(paths)
+            and all(
+                isinstance(value, str)
+                and len(value) == 64
+                and all(character in "0123456789abcdef" for character in value)
+                for value in artifact_hashes.values()
+            ),
+            "plan publication artifact hashes are invalid",
+        )
     hashes = (result.get("artifact_hashes", {}) if stage == "plan" else
               {path: result["candidate_sha"] for path in result.get("artifact_paths", [])})
     baseline = state["manifests"]["plan"]["value"]["result"]["baseline"]

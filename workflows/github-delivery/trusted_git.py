@@ -168,6 +168,22 @@ class TrustedGit:
                   "origin", f"{sha}:{ref}")
         delivery.require(self.remote_head(branch) == sha, "remote branch readback mismatch")
 
+    def require_material_change(self, previous: str) -> None:
+        """Require the imported candidate to change the prior commit's tree."""
+        self._require_open()
+        self._require_sha(previous, "superseded")
+        delivery.require(self.candidate_sha is not None, "candidate has not been imported")
+        delivery.require(self._object_exists(f"{previous}^{{commit}}"),
+                         "bundle does not contain the superseded commit")
+        ancestor = self._git("merge-base", "--is-ancestor", previous, self.candidate_sha,
+                             check=False)
+        delivery.require(ancestor.returncode == 0,
+                         "corrected candidate is not a fast-forward of the superseded commit")
+        delivery.require(
+            self._rev_parse(f"{previous}^{{tree}}") != self._rev_parse(f"{self.candidate_sha}^{{tree}}"),
+            "correction must change committed material",
+        )
+
     @staticmethod
     def _validate_canonical_url(value: str) -> str:
         parsed = urlparse(value)

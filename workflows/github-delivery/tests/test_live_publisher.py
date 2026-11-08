@@ -8,11 +8,12 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 
 
 ROOT = Path(__file__).parents[1]
-for name in ("delivery", "trusted_git", "publisher"):
+for name in ("delivery", "trusted_git", "publisher", "publisher_adapter"):
     spec = importlib.util.spec_from_file_location(name, ROOT / f"{name}.py")
     module = importlib.util.module_from_spec(spec)
     assert spec.loader
@@ -21,6 +22,7 @@ for name in ("delivery", "trusted_git", "publisher"):
 
 delivery = sys.modules["delivery"]
 publisher = sys.modules["publisher"]
+publisher_adapter = sys.modules["publisher_adapter"]
 
 
 class FakeClient:
@@ -140,6 +142,13 @@ class FakeTrustedGit:
         if sha != self.candidate:
             raise delivery.DeliveryError("unimported candidate")
         self.client.remote_heads[branch] = sha
+        for pr in self.client.prs.values():
+            if pr["head"]["ref"] == branch:
+                pr["head"]["sha"] = sha
+
+    def require_material_change(self, previous):
+        if previous == self.candidate:
+            raise delivery.DeliveryError("correction must change committed material")
 
 
 class LivePublisherTest(unittest.TestCase):
@@ -356,6 +365,265 @@ class LivePublisherTest(unittest.TestCase):
         self.assertEqual(result["pr"]["number"], 8)
         self.assertEqual(result["pr"]["head_sha"], expected["head_sha"])
         self.assertEqual(self.client.mutations, [])
+
+    def _provenance_body(self, expected, *, manifest_digest=None, plan_revision=None):
+        return "\n".join([
+            "Issue: https://github.com/acme/widget/issues/42",
+            "delivery-id: delivery-42",
+            f"plan-revision: {plan_revision or expected['plan_revision']}",
+            f"manifest-digest: {manifest_digest or expected['manifest_digest']}",
+            f"issue-digest: {self.issue_digest}",
+            "final-target: main",
+        ])
+
+    def test_plan_correction_updates_only_owned_draft(self):
+        old = self.expected()
+        old_raw = self.client._raw_pr(
+            12, old["head"], old["head_sha"], old["base"], old["base_sha"],
+            self._provenance_body(old),
+        )
+        self.client.prs[12] = old_raw
+        self.client.remote_heads[old["head"]] = old["head_sha"]
+        supersedes = self.publisher._normalize_pr(old_raw)
+        expected = {**old, "head_sha": "e" * 40, "plan_revision": "e" * 40,
+                    "generation": 2, "manifest_digest": "f" * 64}
+        result = self.publisher.execute({
+            **self.common,
+            "action": "publish_plan",
+            "expected": expected,
+            "candidate": {"bundle_path": "candidate.bundle", "paths": ["docs/plan.md"],
+                          "hashes": {"docs/plan.md": "a" * 64}},
+            "prior_pr": supersedes,
+            "supersedes_pr": supersedes,
+            "supersedes_manifest_digest": old["manifest_digest"],
+        })
+        self.assertEqual(result["pr"]["number"], 12)
+        self.assertEqual(result["pr"]["head_sha"], expected["head_sha"])
+        self.assertIn(f"manifest-digest: {expected['manifest_digest']}", result["pr"]["body"])
+        self.assertEqual(self.client.mutations, [("edit", 12)])
+        self.assertEqual(len(self.client.prs), 1)
+        self.assertEqual(self.client.reviews, {})
+
+    def test_plan_correction_rejects_stale_superseded_pr(self):
+        old = self.expected()
+        old_raw = self.client._raw_pr(
+            13, old["head"], old["head_sha"], old["base"], old["base_sha"],
+            self._provenance_body(old),
+        )
+        self.client.prs[13] = old_raw
+        supersedes = self.publisher._normalize_pr(old_raw)
+        self.client.prs[13]["state"] = "closed"
+        self.client.remote_heads[old["head"]] = old["head_sha"]
+        expected = {**old, "head_sha": "e" * 40, "plan_revision": "e" * 40,
+                    "generation": 2, "manifest_digest": "f" * 64}
+        with self.assertRaisesRegex(delivery.DeliveryError, "not an open draft"):
+            self.publisher.execute({
+                **self.common,
+                "action": "publish_plan",
+                "expected": expected,
+                "candidate": {"bundle_path": "candidate.bundle", "paths": ["docs/plan.md"],
+                              "hashes": {"docs/plan.md": "a" * 64}},
+                "supersedes_pr": supersedes,
+                "supersedes_manifest_digest": old["manifest_digest"],
+            })
+        self.assertEqual(self.client.remote_heads[old["head"]], old["head_sha"])
+        self.assertEqual(self.client.mutations, [])
+
+    def test_plan_correction_retry_reconciles_push_before_patch(self):
+        old = self.expected()
+        expected = {**old, "head_sha": "e" * 40, "plan_revision": "e" * 40,
+                    "generation": 2, "manifest_digest": "f" * 64}
+        old_raw = self.client._raw_pr(
+            14, old["head"], expected["head_sha"], old["base"], old["base_sha"],
+            self._provenance_body(old),
+        )
+        self.client.prs[14] = old_raw
+        self.client.remote_heads[old["head"]] = expected["head_sha"]
+        supersedes = self.publisher._normalize_pr(old_raw)
+        supersedes["head_sha"] = old["head_sha"]
+        result = self.publisher.execute({
+            **self.common,
+            "action": "publish_plan",
+            "expected": expected,
+            "candidate": {"bundle_path": "candidate.bundle", "paths": ["docs/plan.md"],
+                          "hashes": {"docs/plan.md": "a" * 64}},
+            "supersedes_pr": supersedes,
+            "supersedes_manifest_digest": old["manifest_digest"],
+        })
+        self.assertEqual(result["pr"]["number"], 14)
+        self.assertEqual(self.client.mutations, [("edit", 14)])
+
+    def test_plan_correction_retry_adopts_patch_before_checkpoint(self):
+        old = self.expected()
+        expected = {**old, "head_sha": "e" * 40, "plan_revision": "e" * 40,
+                    "generation": 2, "manifest_digest": "f" * 64}
+        current_raw = self.client._raw_pr(
+            15, old["head"], expected["head_sha"], old["base"], old["base_sha"],
+            self._provenance_body(expected),
+        )
+        self.client.prs[15] = current_raw
+        self.client.remote_heads[old["head"]] = expected["head_sha"]
+        supersedes = self.publisher._normalize_pr(current_raw)
+        supersedes.update({"head_sha": old["head_sha"], "body": self._provenance_body(old)})
+        result = self.publisher.execute({
+            **self.common,
+            "action": "publish_plan",
+            "expected": expected,
+            "candidate": {"bundle_path": "unused", "paths": ["docs/plan.md"],
+                          "hashes": {"docs/plan.md": "a" * 64}},
+            "supersedes_pr": supersedes,
+            "supersedes_manifest_digest": old["manifest_digest"],
+        })
+        self.assertEqual(result["pr"]["number"], 15)
+        self.assertEqual(self.client.mutations, [])
+
+    def test_implementation_correction_keeps_plan_approval_bound_to_plan_head(self):
+        self.policy_values["branches"]["implementation_template"] = "codex/plan-{issue}"
+        plan = self.expected()
+        old_implementation_sha = "f" * 40
+        old_implementation_digest = "8" * 64
+        plan_raw = self.client._raw_pr(
+            16, plan["head"], plan["head_sha"], plan["base"], plan["base_sha"],
+            self._provenance_body(plan),
+        )
+        plan_pr = self.publisher._normalize_pr(plan_raw)
+        old_body = self._provenance_body(
+            plan, manifest_digest=old_implementation_digest,
+            plan_revision=plan["head_sha"],
+        )
+        current_raw = self.client._raw_pr(
+            16, plan["head"], old_implementation_sha, plan["base"], plan["base_sha"], old_body,
+        )
+        self.client.prs[16] = current_raw
+        self.client.remote_heads[plan["head"]] = old_implementation_sha
+        supersedes = self.publisher._normalize_pr(current_raw)
+        context = "7" * 64
+        self.client.reviews[16] = [{
+            "id": 40, "user": {"id": 101}, "state": "COMMENTED",
+            "commit_id": plan["head_sha"],
+            "body": delivery.review_body("plan", 1, context, "approve"),
+            "submitted_at": "2026-11-08T00:00:00Z",
+        }]
+        expected = {
+            **plan, "head_sha": "9" * 40, "generation": 3,
+            "manifest_digest": "6" * 64,
+        }
+        result = self.publisher.execute({
+            **self.common,
+            "action": "publish_implementation",
+            "expected": expected,
+            "candidate": {"bundle_path": "candidate.bundle", "paths": ["src/change.py"]},
+            "prior_pr": plan_pr,
+            "supersedes_pr": supersedes,
+            "supersedes_manifest_digest": old_implementation_digest,
+            "plan_approval": {
+                "stage": "plan", "pr": plan_pr, "context_digest": context,
+                "generation": 1, "minimum": 1, "reviewer_ids": [101],
+            },
+        })
+        self.assertEqual(result["pr"]["number"], 16)
+        self.assertEqual(result["pr"]["head_sha"], expected["head_sha"])
+        self.assertEqual(self.client.mutations, [("edit", 16)])
+
+    def test_correction_rejects_non_material_candidate(self):
+        old = self.expected()
+        old_raw = self.client._raw_pr(
+            17, old["head"], old["head_sha"], old["base"], old["base_sha"],
+            self._provenance_body(old),
+        )
+        self.client.prs[17] = old_raw
+        self.client.remote_heads[old["head"]] = old["head_sha"]
+        supersedes = self.publisher._normalize_pr(old_raw)
+        expected = {**old, "generation": 2, "manifest_digest": "f" * 64}
+        with self.assertRaisesRegex(delivery.DeliveryError, "change committed material"):
+            self.publisher.execute({
+                **self.common,
+                "action": "publish_plan",
+                "expected": expected,
+                "candidate": {"bundle_path": "candidate.bundle", "paths": ["docs/plan.md"],
+                              "hashes": {"docs/plan.md": "a" * 64}},
+                "supersedes_pr": supersedes,
+                "supersedes_manifest_digest": old["manifest_digest"],
+            })
+        self.assertEqual(self.client.mutations, [])
+
+    def test_approval_context_rejects_stale_or_unhashed_plan_publication(self):
+        expected = self.expected()
+        pr = {
+            "number": 1, "repo": expected["repo"], "head": expected["head"],
+            "head_sha": expected["head_sha"], "base": expected["base"],
+            "base_sha": expected["base_sha"], "draft": True, "state": "OPEN", "body": "",
+        }
+        result = {
+            "issue": 42,
+            "plan_revision": expected["head_sha"],
+            "baseline": {"sha": expected["base_sha"]},
+            "artifact_paths": ["docs/plan.md"],
+            "artifact_hashes": {"docs/plan.md": "a" * 64},
+        }
+        state = {
+            "issue": 42,
+            "repo": expected["repo"],
+            "policy": {"digest": "1" * 64},
+            "policy_values": {"delivery": {"final_target": "main"}},
+            "manifests": {"plan": {"generation": 2, "digest": "2" * 64,
+                                     "value": {"result": result}}},
+            "publication": {"plan": {"generation": 1, "manifest_digest": "2" * 64,
+                                      "pr": pr}},
+        }
+        with self.assertRaisesRegex(delivery.DeliveryError, "generation is stale"):
+            publisher_adapter.approval_context(state, "plan")
+        state["publication"]["plan"]["generation"] = 2
+        result["artifact_hashes"]["docs/plan.md"] = "bogus"
+        with self.assertRaisesRegex(delivery.DeliveryError, "artifact hashes are invalid"):
+            publisher_adapter.approval_context(state, "plan")
+
+    def test_adapter_checkpoints_publication_before_clearing_correction(self):
+        expected = self.expected()
+        old_pr = {
+            "number": 18, "repo": expected["repo"], "head": expected["head"],
+            "head_sha": "a" * 40, "base": expected["base"],
+            "base_sha": expected["base_sha"], "draft": True, "state": "OPEN",
+            "body": "old",
+        }
+        new_pr = {**old_pr, "head_sha": expected["head_sha"], "body": "new"}
+        state = {
+            "status": "plan_review",
+            "delivery_id": "delivery-42",
+            "repo": expected["repo"],
+            "policy": self.common["policy"],
+            "policy_values": self.policy_values,
+            "agent": {"scratch": str(self.root)},
+            "operations": [],
+            "manifests": {"plan": {"generation": 2, "digest": expected["manifest_digest"],
+                                     "value": {"result": {
+                                         "artifact_paths": ["docs/plan.md"],
+                                         "artifact_hashes": {"docs/plan.md": "a" * 64},
+                                     }}}},
+            "publication": {"plan": {"pr": old_pr, "generation": 1,
+                                      "manifest_digest": "9" * 64}},
+            "corrections": {"plan": {"pr": old_pr, "generation": 1,
+                                      "manifest_digest": "9" * 64}},
+        }
+        observed = {}
+
+        def fake_mutation(current, _launcher, packet, save, validate):
+            observed["packet"] = packet
+            self.assertIn("plan", current["corrections"])
+            response = {"pr": new_pr}
+            validate(response)
+            return response
+
+        saves = []
+        with patch.object(publisher_adapter, "expected_publication", return_value=expected), \
+             patch.object(publisher_adapter, "call_mutation", side_effect=fake_mutation):
+            publisher_adapter.publish(state, self.root / "launcher", "plan",
+                                      lambda current: saves.append(dict(current)))
+        self.assertEqual(observed["packet"]["supersedes_pr"], old_pr)
+        self.assertEqual(observed["packet"]["supersedes_manifest_digest"], "9" * 64)
+        self.assertNotIn("corrections", state)
+        self.assertEqual(state["publication"]["plan"]["pr"], new_pr)
+        self.assertTrue(saves)
 
     def test_finalize_rechecks_review_marks_ready_and_adds_label(self):
         self.policy_values["approvals"]["plan"]["minimum"] = 0

@@ -188,9 +188,15 @@ def policy_requirements(policy: dict[str, Any], escalation: dict[str, int] | Non
 def skill_hashes(skills_root: Path) -> dict[str, str]:
     hashes = {}
     for skill in SKILLS:
-        path = skills_root / skill / "SKILL.md"
-        require(path.is_file(), f"missing pinned skill: {path}")
-        hashes[skill] = digest_bytes(path.read_bytes())
+        package = skills_root / skill
+        require(not package.is_symlink() and (package / "SKILL.md").is_file(),
+                f"missing pinned skill package: {package}")
+        files = {}
+        for path in sorted(package.rglob("*")):
+            require(not path.is_symlink(), f"symlink in pinned skill package: {path}")
+            if path.is_file():
+                files[path.relative_to(package).as_posix()] = digest_bytes(path.read_bytes())
+        hashes[skill] = digest_bytes(canonical_json(files))
     return hashes
 
 
@@ -211,7 +217,7 @@ def validate_manifest(manifest: dict[str, Any], kind: str) -> None:
         "rank": {"winner", "no_candidate", "shortlist"},
         "plan": {"artifact_paths", "artifact_hashes", "plan_revision", "issue", "baseline", "base"},
         "implement": {"candidate_sha", "artifact_paths", "verification", "issue", "base"},
-        "closeout": {"status", "head_sha", "base_sha", "checks"},
+        "closeout": {"status", "delivery_status", "head_sha", "base_sha", "checks"},
     }[kind]
     require(set(manifest["result"]) <= allowed, f"unexpected {kind} manifest fields")
 
@@ -312,7 +318,7 @@ def run_spec_kit(state: dict[str, Any], state_dir: Path, *, run_id: str | None =
                            ("worktree", state["agent"]["worktree"]),
                            ("agent_scratch", state["agent"]["scratch"]),
                            ("skills_root", state["agent"]["skills_root"]),
-                           ("run_rank", str(state.get("issue") is None).lower()),
+                           ("run_rank", str(state.get("issue") is None and status != "completed").lower()),
                            ("run_plan", str("plan" not in manifests).lower()),
                            ("publish_plan", str("plan" not in publication).lower()),
                            ("run_implementation", str("implement" not in manifests).lower()),
@@ -426,6 +432,11 @@ class Coordinator:
         require(manifest["repo"] == state["repo"], "manifest repository mismatch")
         manifest_digest = digest_bytes(canonical_json(manifest))
         previous = state.get("manifests", {}).get(kind)
+        published_stage = {"plan": "plan", "implement": "implementation"}.get(kind)
+        if published_stage in state.get("publication", {}):
+            require(previous and previous["digest"] == manifest_digest,
+                    "use a paused review correction to replace a published manifest")
+            return state
         material = dict(manifest["result"])
         if kind == "implement":
             material.pop("verification", None)
@@ -443,9 +454,6 @@ class Coordinator:
             result = manifest["result"]
             if result.get("no_candidate"):
                 state["status"] = "completed"
-                active = {"delivery_id": state["delivery_id"], "repo": state["repo"], "issue": None,
-                          "status": "released", "released_at": utc_now()}
-                atomic_json(self._repo_dir(state["repo"]) / "active.json", active)
             else:
                 require(isinstance(result.get("winner"), int) and result["winner"] > 0,
                         "rank manifest requires winner or no_candidate")
@@ -465,13 +473,62 @@ class Coordinator:
                         "closeout revisions differ from verified publication")
             verdict = result.get("status")
             require(verdict in ("READY", "WAITING", "BLOCKED"), "invalid closeout status")
-            state["status"] = {"READY": "review_ready", "WAITING": "ci_waiting", "BLOCKED": "blocked"}[verdict]
+            delivery_status = result.get("delivery_status")
+            require(delivery_status in ("READY", "WAITING", "BLOCKED"), "invalid delivery closeout status")
+            require(delivery_status != "READY"
+                    or not any(check in ("pending", "failure") for check in result.get("checks", [])),
+                    "delivery readiness conflicts with pending or failed checks")
+            state["merge_readiness"] = verdict
+            state["status"] = {"READY": "review_ready", "WAITING": "ci_waiting", "BLOCKED": "blocked"}[delivery_status]
         state["history"].append({"event": f"{kind}_manifest", "generation": generation,
                                  "digest": manifest_digest, "at": utc_now()})
         self.save(state)
-        if kind == "closeout" and state["status"] == "review_ready":
+        if ((kind == "rank" and state["status"] == "completed")
+                or (kind == "closeout" and state["status"] == "review_ready")):
             self.release(state)
         return state
+
+    def accept_correction(self, state: dict[str, Any], manifest: dict[str, Any]) -> dict[str, Any]:
+        kind = manifest.get("kind")
+        stages = {"plan": ("plan", "plan_revision"), "implement": ("implementation", "candidate_sha")}
+        require(kind in stages, "correction must be a plan or implementation manifest")
+        stage, sha_key = stages[kind]
+        current_step = state.get("runner", {}).get("current_step_id")
+        pending = state.get("corrections", {}).get(kind)
+        paused_review = state["runner_status"] == "paused" and current_step == f"{stage}-review"
+        failed_update = (pending is not None and state["runner_status"] == "failed"
+                         and current_step == f"publish-{stage}")
+        require((paused_review or failed_update) and state["status"] == f"{stage}_review",
+                f"correction requires a paused {stage} review or failed correction publication")
+        validate_manifest(manifest, kind)
+        require(manifest["delivery_id"] == state["delivery_id"] and manifest["repo"] == state["repo"],
+                "correction delivery or repository mismatch")
+        previous = state["manifests"][kind]["value"]["result"]
+        result = manifest["result"]
+        sha = result.get(sha_key)
+        require(isinstance(sha, str) and FULL_SHA.fullmatch(sha) and sha != previous.get(sha_key),
+                "correction requires a new candidate commit")
+        require(result.get("issue") == state["issue"], "correction cannot change the issue")
+        require(result.get("base", result.get("baseline")) == previous.get("base", previous.get("baseline")),
+                "correction cannot change the publication base")
+        if failed_update:
+            require(sha != pending["pr"]["head_sha"], "correction cannot restore the rejected revision")
+        else:
+            publication = state["publication"][stage]
+            current = state["manifests"][kind]
+            require(publication["pr"].get("draft") is True
+                    and publication["pr"]["head_sha"] == previous[sha_key]
+                    and publication["generation"] == current["generation"]
+                    and publication["manifest_digest"] == current["digest"],
+                    "correction requires the owned draft at the current published revision")
+            state.setdefault("corrections", {})[kind] = state["publication"].pop(stage)
+        state["receipts"].pop(stage, None)
+        state["attempt"] += 1
+        state["runner_status"] = "idle"
+        state["runner_pid"] = None
+        state["history"].append({"event": f"{stage}_correction", "previous_run_id": state["runner_run_id"],
+                                 "attempt": state["attempt"], "at": utc_now()})
+        return self.accept_manifest(state, manifest)
 
     def recover(self, state: dict[str, Any], *, old_pid_alive: bool) -> dict[str, Any]:
         require(state["runner_status"] == "running", "recover requires stranded running state")
@@ -532,6 +589,18 @@ def parser() -> argparse.ArgumentParser:
     return result
 
 
+def run_successor(coordinator: Coordinator, state: dict[str, Any]) -> dict[str, Any]:
+    state["runner_status"] = "running"
+    state["runner_pid"] = os.getpid()
+    coordinator.save(state)
+    result = run_spec_kit(state, coordinator.root)
+    state = coordinator.load(state["repo"], state["delivery_id"])
+    state.update(runner=result, runner_status=result["status"], runner_pid=None,
+                 runner_run_id=result["run_id"])
+    coordinator.save(state)
+    return state
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     try:
@@ -548,22 +617,19 @@ def main(argv: list[str] | None = None) -> int:
             value["publisher_launcher"] = str(args.publisher_launcher.resolve())
             coordinator.save(value)
             if not args.no_dispatch:
-                value["runner_status"] = "running"; value["runner_pid"] = os.getpid(); coordinator.save(value)
-                runner_result = run_spec_kit(value, args.state_dir)
-                value = coordinator.load(args.repo, value["delivery_id"])
-                value["runner"] = runner_result; value["runner_status"] = runner_result["status"]
-                value["runner_pid"] = None
-                value["runner_run_id"] = runner_result["run_id"]; coordinator.save(value)
+                value = run_successor(coordinator, value)
         else:
             value = coordinator.load(args.repo, args.delivery_id)
             if args.command == "resume":
                 coordinator.verify_resume(value, args.skills_root)
                 if args.result:
-                    value = coordinator.accept_manifest(value, read_json(args.result))
+                    value = coordinator.accept_correction(value, read_json(args.result))
                 current = value.get("runner", {}).get("current_step_id")
                 stage = "plan" if current == "plan-review" else (
                     "implementation" if current == "implementation-review" else None)
-                if stage:
+                if value["runner_status"] == "idle" and value.get("corrections"):
+                    value = run_successor(coordinator, value)
+                elif value["runner_status"] == "paused" and stage:
                     import publisher_adapter
                     value, verdict = publisher_adapter.check_approval(
                         value, Path(value["publisher_launcher"]), stage)
@@ -594,12 +660,7 @@ def main(argv: list[str] | None = None) -> int:
                 pid = value.get("runner_pid")
                 alive = bool(pid) and _pid_alive(pid)
                 value = coordinator.recover(value, old_pid_alive=alive)
-                value["runner_status"] = "running"; value["runner_pid"] = os.getpid(); coordinator.save(value)
-                runner_result = run_spec_kit(value, args.state_dir)
-                value = coordinator.load(args.repo, args.delivery_id)
-                value["runner"] = runner_result; value["runner_status"] = runner_result["status"]
-                value["runner_pid"] = None; value["runner_run_id"] = runner_result["run_id"]
-                coordinator.save(value)
+                value = run_successor(coordinator, value)
             elif args.command == "advance":
                 expected = "plan_review" if args.stage == "plan" else "implementation_review"
                 target = "implementation_required" if args.stage == "plan" else "publication_pending"

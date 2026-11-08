@@ -271,6 +271,16 @@ class Publisher:
             if key == "plan_approval" and field == "head_sha":
                 implementation = packet.get("expected", packet.get("pr", {}))
                 allowed = {expected_pr["head_sha"], implementation.get("head_sha")}
+                supersedes = packet.get("supersedes_pr")
+                if (
+                    isinstance(supersedes, dict)
+                    and supersedes.get("number") == expected_pr.get("number")
+                    and supersedes.get("repo") == expected_pr.get("repo")
+                    and supersedes.get("head") == expected_pr.get("head")
+                    and supersedes.get("base") == expected_pr.get("base")
+                    and supersedes.get("base_sha") == expected_pr.get("base_sha")
+                ):
+                    allowed.add(supersedes.get("head_sha"))
                 delivery.require(pr[field] in allowed, "reviewed PR head changed unexpectedly")
             else:
                 delivery.require(pr[field] == expected_pr[field], f"reviewed PR {field} changed")
@@ -344,6 +354,19 @@ class Publisher:
             )
             if is_convertible_prior:
                 continue
+            supersedes = packet.get("supersedes_pr")
+            is_superseded_prior = (
+                isinstance(supersedes, dict)
+                and supersedes.get("number") == pr["number"]
+                and supersedes.get("repo") == pr["repo"]
+                and supersedes.get("head") == pr["head"]
+                and supersedes.get("base") == pr["base"]
+                and supersedes.get("base_sha") == pr["base_sha"]
+                and supersedes.get("body") == body
+                and pr["head_sha"] in {supersedes.get("head_sha"), expected["head_sha"]}
+            )
+            if is_superseded_prior:
+                continue
             conflicts.append(pr)
         delivery.require(not conflicts, "head branch has a conflicting PR or provenance")
         delivery.require(len(exact) <= 1, "multiple exact PRs match the delivery")
@@ -392,6 +415,50 @@ class Publisher:
         )
         return current
 
+    def _verified_superseded(self, packet: dict[str, Any]) -> dict[str, Any]:
+        supersedes = packet.get("supersedes_pr")
+        delivery.require(isinstance(supersedes, dict), "correction is missing its superseded PR")
+        expected = packet["expected"]
+        current = self._get_pr(supersedes["number"])
+        for field in ("repo", "head", "base", "base_sha"):
+            delivery.require(current[field] == supersedes.get(field),
+                             f"superseded PR {field} changed")
+        delivery.require(current["head"] == expected["head"], "superseded PR branch changed")
+        delivery.require(current["base"] == expected["base"], "superseded PR base changed")
+        delivery.require(
+            current["state"] == "OPEN" and current["draft"],
+            "superseded PR is not an open draft",
+        )
+        delivery.require(current["body"] == supersedes.get("body"),
+                         "superseded PR provenance changed")
+        delivery.require(
+            current["head_sha"] in {supersedes.get("head_sha"), expected["head_sha"]},
+            "superseded PR head changed",
+        )
+        _, owner, name = repo_parts(self.repo)
+        old_digest = packet.get("supersedes_manifest_digest")
+        old_plan_revision = (
+            supersedes.get("head_sha")
+            if packet["action"] == "publish_plan"
+            else expected["plan_revision"]
+        )
+        markers = (
+            f"Issue: https://github.com/{owner}/{name}/issues/{expected['issue']}",
+            f"delivery-id: {packet['delivery_id']}",
+            f"plan-revision: {old_plan_revision}",
+            f"manifest-digest: {old_digest}",
+            f"issue-digest: {self.issue_digest}",
+            f"final-target: {packet['policy_values']['delivery']['final_target']}",
+        )
+        delivery.require(
+            isinstance(old_digest, str)
+            and len(old_digest) == 64
+            and all(character in "0123456789abcdef" for character in old_digest)
+            and all(marker in current["body"] for marker in markers),
+            "superseded PR provenance is not current",
+        )
+        return current
+
     def _publish(self, packet: dict[str, Any]) -> dict[str, Any]:
         expected = packet["expected"]
         delivery.require(canonical_repo(expected["repo"]) == self.repo, "expected repository mismatch")
@@ -410,8 +477,26 @@ class Publisher:
             "publication base violates policy",
         )
         self._base_tip(expected)
+        supersedes = packet.get("supersedes_pr")
+        if supersedes is not None:
+            delivery.require(isinstance(supersedes, dict), "superseded PR is invalid")
+            match = self._match_pr(packet)
+            if match:
+                delivery.require(match["number"] == supersedes.get("number"),
+                                 "corrected PR identity changed")
+                delivery.require(match["state"] == "OPEN" and match["draft"],
+                                 "matching PR is not an open draft")
+                self._verify_pr_provenance(packet, match)
+                if packet["action"] == "publish_implementation":
+                    self._approval(packet, "plan_approval")
+                return {"schema_version": 1, "action": packet["action"], "pr": match}
+            verified_superseded = self._verified_superseded(packet)
+            if packet["action"] == "publish_implementation":
+                self._approval(packet, "plan_approval")
+        else:
+            verified_superseded = None
         verified_prior = None
-        if packet["action"] == "publish_implementation":
+        if packet["action"] == "publish_implementation" and verified_superseded is None:
             prior = packet.get("prior_pr")
             delivery.require(isinstance(prior, dict), "implementation is missing its plan PR")
             match = self._match_pr(packet)
@@ -432,6 +517,9 @@ class Publisher:
             self._approval(packet, "plan_approval")
         match = self._match_pr(packet)
         if match:
+            if verified_superseded is not None:
+                delivery.require(match["number"] == supersedes["number"],
+                                 "corrected PR identity changed")
             delivery.require(match["state"] == "OPEN" and match["draft"], "matching PR is not an open draft")
             self._verify_pr_provenance(packet, match)
             return {"schema_version": 1, "action": packet["action"], "pr": match}
@@ -447,7 +535,7 @@ class Publisher:
                 hashes,
             )
             current = trusted.remote_head(expected["head"])
-            prior = verified_prior
+            prior = verified_superseded or verified_prior
             prior_sha = (
                 prior.get("head_sha")
                 if prior and prior.get("head") == expected["head"]
@@ -457,6 +545,8 @@ class Publisher:
                 current in (None, prior_sha, expected["head_sha"]),
                 "publication branch moved",
             )
+            if verified_superseded is not None:
+                trusted.require_material_change(supersedes["head_sha"])
             if current != expected["head_sha"]:
                 self._verify_policy(packet)
                 self._base_tip(expected)
@@ -465,14 +555,36 @@ class Publisher:
                 trusted.push(expected["head"], expected["head_sha"], current)
         match = self._match_pr(packet)
         if match:
+            if verified_superseded is not None:
+                delivery.require(match["number"] == supersedes["number"],
+                                 "corrected PR identity changed")
             delivery.require(match["state"] == "OPEN" and match["draft"], "matching PR is not an open draft")
             self._verify_pr_provenance(packet, match)
             return {"schema_version": 1, "action": packet["action"], "pr": match}
 
         body = self._pr_body(packet)
-        prior = verified_prior
-        same_branch = prior and prior.get("head") == expected["head"]
-        if packet["action"] == "publish_implementation" and same_branch:
+        if verified_superseded is not None:
+            current_pr = self._verified_superseded(packet)
+            delivery.require(
+                current_pr["head_sha"] == expected["head_sha"],
+                "corrected PR head was not published",
+            )
+            self._verify_policy(packet)
+            self._base_tip(expected)
+            if packet["action"] == "publish_implementation":
+                self._approval(packet, "plan_approval")
+            value = self.client.api(
+                "PATCH",
+                self.repo,
+                f"/repos/{{owner}}/{{repo}}/pulls/{current_pr['number']}",
+                {"title": ("Plan" if packet["action"] == "publish_plan" else "Implement")
+                 + f" issue #{expected['issue']}", "body": body, "base": expected["base"]},
+            )
+        elif (
+            packet["action"] == "publish_implementation"
+            and verified_prior
+            and verified_prior.get("head") == expected["head"]
+        ):
             current_pr = self._verified_prior_plan(packet)
             delivery.require(
                 current_pr["draft"]
@@ -511,10 +623,16 @@ class Publisher:
                 },
             )
         created = self._normalize_pr(value)
+        if verified_superseded is not None:
+            delivery.require(created["number"] == supersedes["number"],
+                             "corrected PR identity changed")
         delivery.require(created["draft"] and created["state"] == "OPEN", "PR is not an open draft")
         delivery.require(created["head_sha"] == expected["head_sha"], "published PR head mismatch")
         delivery.require(created["base"] == expected["base"], "published PR base mismatch")
         readback = self._get_pr(created["number"])
+        if verified_superseded is not None:
+            delivery.require(readback["number"] == supersedes["number"],
+                             "corrected PR identity changed")
         self._verify_pr_provenance(packet, readback)
         return {"schema_version": 1, "action": packet["action"], "pr": readback}
 

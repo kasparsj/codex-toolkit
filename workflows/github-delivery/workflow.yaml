@@ -55,9 +55,21 @@ steps:
         run: |
           set -euo pipefail
           python3 "$DELIVERY_ADAPTER_DIR/adapter.py" run --kind rank --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID" --launcher "$DELIVERY_AGENT_LAUNCHER" --worktree "$DELIVERY_WORKTREE" --scratch "$DELIVERY_AGENT_SCRATCH/rank" --skills-root "$DELIVERY_SKILLS_ROOT"
+  - id: post-rank-status
+    type: shell
+    strict: true
+    output_format: json
+    env:
+      DELIVERY_STATE_DIR: "{{ inputs.state_dir }}"
+      DELIVERY_REPO: "{{ inputs.repo }}"
+      DELIVERY_ID: "{{ inputs.delivery_id }}"
+      DELIVERY_ADAPTER_DIR: "{{ inputs.adapter_dir }}"
+    run: |
+      set -euo pipefail
+      python3 "$DELIVERY_ADAPTER_DIR/delivery.py" status --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID"
   - id: dispatch-plan-local
     type: if
-    condition: "{{ inputs.run_plan }}"
+    condition: "{{ inputs.run_plan and steps.post-rank-status.output.data.status != 'completed' }}"
     then:
       - id: plan-local
         type: shell
@@ -68,7 +80,7 @@ steps:
           python3 "$DELIVERY_ADAPTER_DIR/adapter.py" run --kind plan --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID" --launcher "$DELIVERY_AGENT_LAUNCHER" --worktree "$DELIVERY_WORKTREE" --scratch "$DELIVERY_AGENT_SCRATCH/plan" --skills-root "$DELIVERY_SKILLS_ROOT"
   - id: dispatch-publish-plan
     type: if
-    condition: "{{ inputs.publish_plan }}"
+    condition: "{{ inputs.publish_plan and steps.post-rank-status.output.data.status != 'completed' }}"
     then:
       - id: publish-plan
         type: shell
@@ -84,7 +96,7 @@ steps:
           python3 "$DELIVERY_ADAPTER_DIR/publisher_adapter.py" publish-plan --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID" --launcher "$DELIVERY_PUBLISHER_LAUNCHER"
   - id: optional-plan-gate
     type: if
-    condition: "{{ inputs.plan_gate }}"
+    condition: "{{ inputs.plan_gate and steps.post-rank-status.output.data.status != 'completed' }}"
     then:
       - id: plan-review
         type: gate
@@ -94,7 +106,7 @@ steps:
         verdict_input: plan_verdict
   - id: complete-plan-gate
     type: if
-    condition: "{{ inputs.plan_gate }}"
+    condition: "{{ inputs.plan_gate and steps.post-rank-status.output.data.status != 'completed' }}"
     then:
       - id: advance-plan
         type: shell
@@ -109,7 +121,7 @@ steps:
           python3 "$DELIVERY_ADAPTER_DIR/delivery.py" advance --stage plan --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID"
   - id: dispatch-implementation-local
     type: if
-    condition: "{{ inputs.run_implementation }}"
+    condition: "{{ inputs.run_implementation and steps.post-rank-status.output.data.status != 'completed' }}"
     then:
       - id: implementation-local
         type: shell
@@ -120,7 +132,7 @@ steps:
           python3 "$DELIVERY_ADAPTER_DIR/adapter.py" run --kind implement --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID" --launcher "$DELIVERY_AGENT_LAUNCHER" --worktree "$DELIVERY_WORKTREE" --scratch "$DELIVERY_AGENT_SCRATCH/implement" --skills-root "$DELIVERY_SKILLS_ROOT"
   - id: dispatch-publish-implementation
     type: if
-    condition: "{{ inputs.publish_implementation }}"
+    condition: "{{ inputs.publish_implementation and steps.post-rank-status.output.data.status != 'completed' }}"
     then:
       - id: publish-implementation
         type: shell
@@ -136,7 +148,7 @@ steps:
           python3 "$DELIVERY_ADAPTER_DIR/publisher_adapter.py" publish-implementation --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID" --launcher "$DELIVERY_PUBLISHER_LAUNCHER"
   - id: optional-implementation-gate
     type: if
-    condition: "{{ inputs.implementation_gate }}"
+    condition: "{{ inputs.implementation_gate and steps.post-rank-status.output.data.status != 'completed' }}"
     then:
       - id: implementation-review
         type: gate
@@ -146,7 +158,7 @@ steps:
         verdict_input: implementation_verdict
   - id: complete-implementation-gate
     type: if
-    condition: "{{ inputs.implementation_gate }}"
+    condition: "{{ inputs.implementation_gate and steps.post-rank-status.output.data.status != 'completed' }}"
     then:
       - id: advance-implementation
         type: shell
@@ -161,7 +173,7 @@ steps:
           python3 "$DELIVERY_ADAPTER_DIR/delivery.py" advance --stage implementation --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID"
   - id: dispatch-finalize
     type: if
-    condition: "{{ inputs.finalize }}"
+    condition: "{{ inputs.finalize and steps.post-rank-status.output.data.status != 'completed' }}"
     then:
       - id: finalize
         type: shell
@@ -175,13 +187,17 @@ steps:
         run: |
           set -euo pipefail
           python3 "$DELIVERY_ADAPTER_DIR/publisher_adapter.py" finalize --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID" --launcher "$DELIVERY_PUBLISHER_LAUNCHER"
-  - id: closeout
-    type: shell
-    strict: true
-    env: *agent_env
-    run: |
-      set -euo pipefail
-      python3 "$DELIVERY_ADAPTER_DIR/adapter.py" run --kind closeout --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID" --launcher "$DELIVERY_AGENT_LAUNCHER" --worktree "$DELIVERY_WORKTREE" --scratch "$DELIVERY_AGENT_SCRATCH/closeout" --skills-root "$DELIVERY_SKILLS_ROOT"
+  - id: dispatch-closeout
+    type: if
+    condition: "{{ steps.post-rank-status.output.data.status != 'completed' }}"
+    then:
+      - id: closeout
+        type: shell
+        strict: true
+        env: *agent_env
+        run: |
+          set -euo pipefail
+          python3 "$DELIVERY_ADAPTER_DIR/adapter.py" run --kind closeout --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID" --launcher "$DELIVERY_AGENT_LAUNCHER" --worktree "$DELIVERY_WORKTREE" --scratch "$DELIVERY_AGENT_SCRATCH/closeout" --skills-root "$DELIVERY_SKILLS_ROOT"
   - id: final-status
     type: shell
     strict: true

@@ -236,6 +236,20 @@ class DeliveryTest(unittest.TestCase):
         ready = delivery.closeout_verdict(["success"], draft=False, merge_requested=True)
         self.assertEqual(ready["delivery_status"], "READY"); self.assertFalse(ready["merge_performed"])
 
+    def test_closeout_cannot_release_claim_while_delivery_checks_are_pending(self):
+        state = self.start()
+        coordinator = delivery.Coordinator(self.root / "state")
+        manifest = {"schema_version": 1, "kind": "closeout", "delivery_id": state["delivery_id"],
+                    "repo": state["repo"], "result": {"status": "WAITING", "delivery_status": "READY",
+                    "head_sha": "d" * 40, "base_sha": "c" * 40, "checks": ["pending"]}}
+        with self.assertRaisesRegex(delivery.DeliveryError, "pending or failed checks"):
+            coordinator.accept_manifest(state, manifest)
+        manifest["result"]["delivery_status"] = "WAITING"
+        coordinator.accept_manifest(state, manifest)
+        self.assertEqual(state["status"], "ci_waiting")
+        with self.assertRaisesRegex(delivery.DeliveryError, "already claimed"):
+            self.start(issue=43, delivery_id="delivery-43")
+
     def test_privilege_and_manifest_validation(self):
         scratch = self.root / "scratch"; scratch.mkdir()
         clean = {"DELIVERY_AGENT_ISOLATED": "1", "HOME": str(scratch),
@@ -250,8 +264,21 @@ class DeliveryTest(unittest.TestCase):
             delivery.validate_manifest({**manifest, "result": {"shell": "rm -rf"}}, "rank")
 
     def test_resume_freezes_skill_sources_and_recover_waits_for_exit(self):
+        package = self.skills / "plan-pr"
+        reference = package / "references" / "publication.md"
+        script = package / "scripts" / "render.cjs"
+        for asset in (reference, script):
+            asset.parent.mkdir()
+            asset.write_text("pinned")
         state = self.start()
         coordinator = delivery.Coordinator(self.root / "state")
+        coordinator.verify_resume(state, self.skills)
+        for asset in (reference, script):
+            with self.subTest(asset=asset):
+                asset.write_text("changed")
+                with self.assertRaisesRegex(delivery.DeliveryError, "changed"):
+                    coordinator.verify_resume(state, self.skills)
+                asset.write_text("pinned")
         coordinator.verify_resume(state, self.skills)
         (self.skills / "plan-pr" / "SKILL.md").write_text("changed")
         with self.assertRaisesRegex(delivery.DeliveryError, "changed"):
@@ -296,6 +323,34 @@ class DeliveryTest(unittest.TestCase):
         manifest["result"]["verification"] = ["test passed again"]
         coordinator.accept_manifest(state, manifest)
         self.assertEqual(state["manifests"]["implement"]["generation"], 1)
+
+    def test_correction_replaces_publication_and_receipt_before_dispatch(self):
+        state = self.start()
+        coordinator = delivery.Coordinator(self.root / "state")
+        manifest = {"schema_version": 1, "kind": "plan", "delivery_id": state["delivery_id"],
+                    "repo": state["repo"], "result": {"artifact_paths": ["docs/plan.md"],
+                    "artifact_hashes": {"docs/plan.md": "a" * 64}, "plan_revision": "b" * 40,
+                    "issue": 42, "baseline": {"repo": state["repo"], "ref": "main", "sha": "c" * 40}}}
+        coordinator.accept_manifest(state, manifest)
+        record = state["manifests"]["plan"]
+        publication = {"pr": {"head_sha": "b" * 40, "draft": True},
+                       "generation": record["generation"], "manifest_digest": record["digest"]}
+        state.update(publication={"plan": publication}, receipts={"plan": {"approved": False}},
+                     runner_status="paused", runner_run_id="prior",
+                     runner={"current_step_id": "plan-review"})
+        corrected = json.loads(json.dumps(manifest))
+        corrected["result"]["artifact_hashes"]["docs/plan.md"] = "d" * 64
+        with self.assertRaisesRegex(delivery.DeliveryError, "new candidate commit"):
+            coordinator.accept_correction(state, corrected)
+        corrected["result"]["plan_revision"] = "d" * 40
+        with self.assertRaisesRegex(delivery.DeliveryError, "paused review correction"):
+            coordinator.accept_manifest(state, corrected)
+        coordinator.accept_correction(state, corrected)
+        self.assertEqual(state["runner_status"], "idle")
+        self.assertEqual(state["corrections"]["plan"], publication)
+        self.assertEqual(state["manifests"]["plan"]["generation"], 2)
+        self.assertNotIn("plan", state["publication"])
+        self.assertNotIn("plan", state["receipts"])
 
     def test_start_dispatches_exact_pinned_runner_with_managed_gate_inputs(self):
         state = self.start(); calls = []
@@ -348,7 +403,7 @@ class DeliveryTest(unittest.TestCase):
             "scratch": str(self.root / "scratch"), "skills_root": str(self.skills)}
         delivery.Coordinator(self.root / "state").save(state)
         manifest = {"schema_version": 1, "kind": "closeout", "delivery_id": state["delivery_id"],
-            "repo": state["repo"], "result": {"status": "READY", "head_sha": "d" * 40,
+            "repo": state["repo"], "result": {"status": "WAITING", "delivery_status": "READY", "head_sha": "d" * 40,
             "base_sha": "c" * 40, "checks": ["success"]}}
         launcher.write_text("#!/usr/bin/env python3\nimport json,sys\njson.load(sys.stdin)\nprint(" +
                             repr(json.dumps(manifest)) + ")\n"); launcher.chmod(0o700)
@@ -356,7 +411,9 @@ class DeliveryTest(unittest.TestCase):
             "--repo", state["repo"], "--delivery-id", state["delivery_id"], "--skills-root", str(self.skills)],
             text=True, capture_output=True)
         self.assertEqual(completed.returncode, 0, completed.stderr + completed.stdout)
-        self.assertEqual(json.loads(completed.stdout)["status"], "review_ready")
+        result = json.loads(completed.stdout)
+        self.assertEqual(result["status"], "review_ready")
+        self.assertEqual(result["merge_readiness"], "WAITING")
         next_state = delivery.Coordinator(self.root / "state").start(repo=state["repo"], issue=43,
             policy=self.policy(), skills_root=self.skills, delivery_id="delivery-43")
         self.assertEqual(next_state["issue"], 43)
@@ -374,7 +431,7 @@ p=json.load(sys.stdin); k=p['kind']; repo=p['repo']; did=p['delivery_id']; issue
 if k=='rank': r={'winner':42,'shortlist':[42]}
 elif k=='plan': r={'artifact_paths':['docs/plan.md'],'artifact_hashes':{'docs/plan.md':'a'*64},'plan_revision':'b'*40,'issue':issue,'baseline':{'repo':repo,'ref':'main','sha':'c'*40}}
 elif k=='implement': r={'candidate_sha':'d'*40,'artifact_paths':['src/change.py'],'verification':['tests ok'],'issue':issue,'base':{'repo':repo,'ref':'main','sha':'c'*40}}
-else: r={'status':'READY','head_sha':'d'*40,'base_sha':'c'*40,'checks':['success']}
+else: r={'status':'READY','delivery_status':'READY','head_sha':'d'*40,'base_sha':'c'*40,'checks':['success']}
 print(json.dumps({'schema_version':1,'kind':k,'delivery_id':did,'repo':repo,'result':r}))
 """); agent.chmod(0o700)
         publisher_launcher = self.root / "publisher-launcher.py"

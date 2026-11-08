@@ -45,7 +45,7 @@ import json,sys
 p=json.load(sys.stdin); k=p['kind']; repo=p['repo']; did=p['delivery_id']; issue=p['issue']
 if k=='plan': r={'artifact_paths':['docs/plan.md'],'artifact_hashes':{'docs/plan.md':'a'*64},'plan_revision':'b'*40,'issue':issue,'baseline':{'repo':repo,'ref':'main','sha':'c'*40}}
 elif k=='implement': r={'candidate_sha':'d'*40,'artifact_paths':['src/change.py'],'verification':['tests ok'],'issue':issue,'base':{'repo':repo,'ref':'main','sha':'c'*40}}
-else: r={'status':'READY','head_sha':'d'*40,'base_sha':'c'*40,'checks':['success']}
+else: r={'status':'WAITING','delivery_status':'READY','head_sha':'d'*40,'base_sha':'c'*40,'checks':['success']}
 print(json.dumps({'schema_version':1,'kind':k,'delivery_id':did,'repo':repo,'result':r}))
 """); agent.chmod(0o700)
         publisher = root / "publisher.py"
@@ -53,6 +53,7 @@ print(json.dumps({'schema_version':1,'kind':k,'delivery_id':did,'repo':repo,'res
 import json,sys
 from pathlib import Path
 p=json.load(sys.stdin); a=p['action']
+with Path(__file__).with_suffix('.log').open('a') as log: log.write(json.dumps(p,sort_keys=True)+'\\n')
 marker=Path(__file__).with_suffix('.once')
 if a=='publish_plan' and not marker.exists(): marker.write_text('accepted-unknown'); raise SystemExit(3)
 if a.startswith('publish_'):
@@ -87,6 +88,29 @@ print(json.dumps(out))
             sys.stderr.write(completed.stderr + completed.stdout); return completed.returncode
         result = json.loads(completed.stdout); assert result["runner"]["status"] == "paused", result
         assert result["runner"]["current_step_id"] == "plan-review", result
+        first_plan_run_id = result["runner_run_id"]
+        first_plan_pr = result["publication"]["plan"]["pr"]
+        correction = root / "plan-correction.json"
+        correction.write_text(json.dumps({"schema_version": 1, "kind": "plan",
+            "delivery_id": "pinned-e2e", "repo": "github.test/acme/widget",
+            "result": {"artifact_paths": ["docs/plan.md"],
+                "artifact_hashes": {"docs/plan.md": "f" * 64}, "plan_revision": "e" * 40,
+                "issue": 42, "baseline": {"repo": "github.test/acme/widget",
+                    "ref": "main", "sha": "c" * 40}}}))
+        completed = subprocess.run(resume + ["--result", str(correction)], text=True, capture_output=True)
+        if completed.returncode:
+            sys.stderr.write(completed.stderr + completed.stdout); return completed.returncode
+        result = json.loads(completed.stdout); assert result["runner"]["status"] == "paused", result
+        assert result["runner"]["current_step_id"] == "plan-review", result
+        assert result["runner_run_id"] != first_plan_run_id, result
+        assert result["manifests"]["plan"]["generation"] == 2, result
+        assert result["publication"]["plan"]["pr"]["number"] == first_plan_pr["number"], result
+        assert result["publication"]["plan"]["pr"]["head_sha"] == "e" * 40, result
+        packets = [json.loads(line) for line in publisher.with_suffix('.log').read_text().splitlines()]
+        correction_packet = [packet for packet in packets if packet["action"] == "publish_plan"][-1]
+        assert correction_packet["supersedes_pr"]["number"] == first_plan_pr["number"], correction_packet
+        assert correction_packet["expected"]["generation"] == 2, correction_packet
+        assert correction_packet["expected"]["head_sha"] == "e" * 40, correction_packet
         completed = subprocess.run(resume, text=True, capture_output=True)
         if completed.returncode:
             sys.stderr.write(completed.stderr + completed.stdout); return completed.returncode
@@ -112,7 +136,56 @@ print(json.dumps(out))
             sys.stderr.write(completed.stderr + completed.stdout); return completed.returncode
         result = json.loads(completed.stdout); assert result["runner"]["status"] == "completed", result
         assert result["status"] == "review_ready", result
+        assert result["merge_readiness"] == "WAITING", result
+        assert result["manifests"]["closeout"]["value"]["result"]["delivery_status"] == "READY", result
         assert result["publication"]["final"]["pr"]["draft"] is False
+        active_path, = (root / "state" / "repos").glob("*/active.json")
+        assert json.loads(active_path.read_text())["status"] == "released"
+
+        rank_log = root / "rank.log"
+        ranker = root / "ranker.py"
+        ranker.write_text("""#!/usr/bin/env python3
+import json,sys
+from pathlib import Path
+p=json.load(sys.stdin)
+with Path(sys.argv[0]).with_name('rank.log').open('a') as log: log.write(p['kind']+'\\n')
+r={'no_candidate':True,'shortlist':[]}
+print(json.dumps({'schema_version':1,'kind':p['kind'],'delivery_id':p['delivery_id'],'repo':p['repo'],'result':r}))
+"""); ranker.chmod(0o700)
+        no_candidate = [sys.executable, str(WORKFLOW / "delivery.py"), "start",
+            "--state-dir", str(root / "empty-state"), "--repo", "github.test/acme/empty",
+            "--delivery-id", "pinned-empty", "--policy", str(policy),
+            "--policy-ref", "refs/remotes/origin/main", "--policy-sha", "a" * 40,
+            "--policy-digest", digest, "--policy-fetched-at", dt.datetime.now(dt.timezone.utc).isoformat(),
+            "--skills-root", str(ROOT / "skills"), "--agent-launcher", str(ranker),
+            "--publisher-launcher", "/usr/bin/false", "--worktree", str(root),
+            "--agent-scratch", str(root / "empty-agent-scratch")]
+        completed = subprocess.run(no_candidate, text=True, capture_output=True)
+        if completed.returncode:
+            sys.stderr.write(completed.stderr + completed.stdout); return completed.returncode
+        empty = json.loads(completed.stdout)
+        assert empty["runner"]["status"] == "completed", empty
+        assert empty["status"] == "completed", empty
+        assert rank_log.read_text().splitlines() == ["rank"]
+        empty_active, = (root / "empty-state" / "repos").glob("*/active.json")
+        assert json.loads(empty_active.read_text())["status"] == "released"
+        empty_state, = (root / "empty-state" / "repos").glob("*/deliveries/pinned-empty/state.json")
+        interrupted = json.loads(empty_state.read_text())
+        interrupted_run_id = interrupted["runner_run_id"]
+        interrupted["runner_status"] = "running"
+        interrupted["runner_pid"] = None
+        empty_state.write_text(json.dumps(interrupted))
+        recover_empty = [sys.executable, str(WORKFLOW / "delivery.py"), "recover",
+            "--state-dir", str(root / "empty-state"), "--repo", "github.test/acme/empty",
+            "--delivery-id", "pinned-empty", "--skills-root", str(ROOT / "skills")]
+        completed = subprocess.run(recover_empty, text=True, capture_output=True)
+        if completed.returncode:
+            sys.stderr.write(completed.stderr + completed.stdout); return completed.returncode
+        empty = json.loads(completed.stdout)
+        assert empty["runner"]["status"] == "completed", empty
+        assert empty["runner_run_id"] != interrupted_run_id, empty
+        assert rank_log.read_text().splitlines() == ["rank"]
+        assert json.loads(empty_active.read_text())["status"] == "released"
         print(json.dumps({"runner": result["runner"]["status"], "delivery": result["status"]}, sort_keys=True))
         return 0
 

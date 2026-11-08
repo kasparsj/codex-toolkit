@@ -91,9 +91,13 @@ python3 workflows/github-delivery/delivery.py start \
 ```
 
 `next-issue --rank` returns either a structured winner or `no_candidate`.
+An empty result completes the runner and releases the claim.
 `plan-pr` and `implement-plan` return only locally verified artifacts/candidates.
-`pr-closeout` returns `READY`, `WAITING`, or `BLOCKED`; it never merges in this
-workflow. Each result uses this envelope and a kind-specific allowlist:
+`pr-closeout` returns a merge-readiness `status` and a separate
+`delivery_status`, each `READY`, `WAITING`, or `BLOCKED`. Pending delivery checks
+keep the claim active. Merge-only requirements such as approvals or a merge
+queue can leave merge readiness waiting while delivery is complete. Each result
+uses this envelope and a kind-specific allowlist:
 
 ```json
 {
@@ -105,11 +109,14 @@ workflow. Each result uses this envelope and a kind-specific allowlist:
 }
 ```
 
-Accept a result with `resume --result result.json`. The coordinator rejects
-prose, extra fields, the wrong repository/delivery, changed pinned skill files,
-and invalid transitions. Identical retries retain the generation. A material
-correction creates the next generation and invalidates the corresponding old
-approval context.
+At a paused review, commit the correction as a fast-forward from the owned
+draft head and export its bundle to the same stage's candidate path. Submit
+the corrected manifest with `resume --result result.json`. The runner
+publishes the new revision on the same draft before asking for approval again.
+The publisher verifies that the correction changes the committed tree. Use
+plain `resume` to retry an interrupted publication. A replacement candidate
+after a failed correction can publish only if the draft still matches the
+verified previous revision or the replacement already landed.
 
 `start` dispatches the reviewed YAML through the pinned runner. The wrapper
 atomically snapshots the reviewed YAML under `$trusted_state/runner/<delivery-id>/`
@@ -126,7 +133,9 @@ Spec Kit occurrences replay without re-execution on resume.
 The isolated launcher is an executable that reads one JSON task packet from
 stdin and writes exactly one manifest JSON object to stdout. The packet includes
 the stage, delivery identity, dedicated worktree, and exact pinned skill path
-and digest. Diagnostics belong on stderr. `adapter.py` strips GitHub/git
+and file digest. The runner also pins each skill package, including its
+references and scripts, and checks those pins on resume. Diagnostics belong
+on stderr. `adapter.py` strips GitHub/git
 credential variables, installs a scratch HOME/GH config, invokes the launcher,
 validates its manifest, and enforces rank → plan → implement → closeout stage
 order. The launcher may use its own non-GitHub agent credential (for example a
