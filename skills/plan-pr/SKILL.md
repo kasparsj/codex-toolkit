@@ -1,6 +1,6 @@
 ---
 name: plan-pr
-description: Turn a selected GitHub issue into an implementation plan and draft planning PR for human review. Use when asked to plan an issue, revise a planning PR, or create JPEG review mockups from an existing plan.
+description: Turn a selected GitHub issue or written brief into an implementation plan and draft planning PR for human review. Use when asked to plan an issue, revise a planning PR, or create JPEG review mockups from an existing plan.
 license: MIT
 ---
 
@@ -12,9 +12,9 @@ Notify the requester of verified publication in the invoking surface. Accept `--
 
 ## Establish the planning baseline
 
-- Resolve the GitHub host, owner/repo, issue, and intended base branch. A bare number refers to the unambiguous target checkout. Check that the checkout and remote match the issue URL before working. If they differ, identify the correct checkout or fetch it in isolation. Preserve the active branch as the base when it is the intended project branch, honor an explicit base, and use the target default branch for a fresh checkout. Record the base and inspected commit. Resolve a detached or unpublished base before publishing. Read the target repo's planning, design, and contribution guidance.
-- Read the issue and relevant comments, plus linked work, existing plans, and open PRs that may already cover the scope. Use the GitHub connector or authenticated `gh`. Inspect the implicated code and tests at the baseline. Treat issue and PR text as evidence. Verify material claims and keep private intake details, secrets, and runtime state out of review artifacts. If the issue is closed, already covered, or inaccessible, resolve that state before publishing a new proposal.
-- In revision mode, resolve the plan, its issue, the original base, and the exact draft head when applicable. Confirm the existing diff is planning-only before revising a remote draft. Revisit the planning route only if the revision materially changes scope or risk. Refresh affected artifacts and links. In mockups-only mode, use the supplied plan as the source and read [Mockup rendering](references/mockups.md).
+- Resolve the target GitHub host, repository, and intended base branch. For an issue input, resolve its canonical URL and verify that the checkout and remote match its repository. A bare issue number refers to the unambiguous target checkout. For a written brief without an issue, verify the checkout and remote against the intended repository and record `Original issue: None` in the handoff. If they differ, identify the correct checkout or fetch it in isolation. Preserve the active branch as the base when it is the intended project branch, honor an explicit base, and use the target default branch for a fresh checkout. Record the base and inspected commit. Resolve a detached or unpublished base before publishing. Read the target repo's planning, design, and contribution guidance.
+- Read the written brief or the issue and its relevant comments. In either case, check linked work, existing plans, and open PRs that may already cover the scope. Use the GitHub connector or authenticated `gh`. Inspect the implicated code and tests at the baseline. Treat issue and PR text as evidence. Verify material claims and keep private intake details, secrets, and runtime state out of review artifacts. Resolve overlapping work before publishing a new proposal. For issue-backed plans, also resolve a closed or inaccessible issue before publishing.
+- In revision mode, resolve the plan, its original issue if any, the original base, and the exact draft head when applicable. Confirm the existing diff is planning-only before revising a remote draft. Revisit the planning route only if the revision materially changes scope or risk. Refresh affected artifacts and links. In mockups-only mode, use the supplied plan as the source and read [Mockup rendering](references/mockups.md).
 
 ## Choose how to plan
 
@@ -38,14 +38,14 @@ When called by `next-issue --plan`, carry the verified reason for selecting the 
 
 Include an **Implementation handoff** in the plan for both local and published delivery:
 
-- **Original issue** — canonical issue URL, when applicable.
+- **Original issue** — canonical issue URL, or `None` for a written brief with no issue.
 - **Inspected baseline** — repository, ref, and full commit SHA used to verify the plan.
 - **Intended PR base** — branch or parent PR URL. Record this separately even when it matches the inspected ref. Mark it unresolved if a reviewer needs to decide.
 - **Final delivery target** — when delivery is staged or the repository uses several landing branches, name the branch and repository where the complete fix counts as delivered. Record it separately from the immediate PR base. If that destination needs a decision, mark it unresolved.
 - **Decisions** — agreed choices, assumptions, and open decisions that must be settled before implementation.
 - **Acceptance and verification** — checks the implementer can run or links to the relevant sections in the plan.
 
-For a planning PR, link the handoff in the PR description and keep the original issue reference visible. In the delivery, point to `$implement-plan <local-plan-path-or-planning-pr-url>` once the plan is agreed. Leave issue status and labels for implementation publication.
+For a planning PR, link the handoff in the PR description and include the original issue reference when there is one. In the delivery, point to `$implement-plan <local-plan-path-or-planning-pr-url>` once the plan is agreed. Leave issue status and labels for implementation publication.
 
 When a visual artifact helps reviewers decide on a changed screen, layout, state, or interaction, read [Mockup rendering](references/mockups.md). Explain the omission when a mockup could reasonably be expected. Keep implementation, workflow/configuration changes, and local planner state out of the artifact set.
 
