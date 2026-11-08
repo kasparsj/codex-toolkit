@@ -14,11 +14,13 @@ async function render() {
   const html = resolve(input);
   const browser = await chromium.launch({ channel: process.env.PLAN_PR_CHROMIUM_CHANNEL });
   try {
-    const page = await browser.newPage({
+    const context = await browser.newContext({
       viewport: { width: Number(width), height: Number(height) },
       serviceWorkers: 'block',
     });
-    await page.route(/^https?:\/\//, route => route.abort());
+    await context.route(/^https?:\/\//, route => route.abort());
+    await context.routeWebSocket(/^wss?:\/\//, webSocket => webSocket.close());
+    const page = await context.newPage();
     await page.goto(pathToFileURL(html).href, { waitUntil: 'load' });
     await page.screenshot({
       path: html.replace(/\.html$/, '.jpeg'),
