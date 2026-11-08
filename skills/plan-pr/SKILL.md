@@ -36,6 +36,17 @@ Use the repo's established paths and artifact formats. Otherwise write `docs/pla
 
 When called by `next-issue --plan`, carry the verified reason for selecting the issue into the plan or PR summary.
 
+Include an **Implementation handoff** in the plan for both local and published delivery:
+
+- **Original issue** — canonical issue URL, when applicable.
+- **Inspected baseline** — repository, ref, and full commit SHA used to verify the plan.
+- **Intended PR base** — branch or parent PR URL. Record this separately even when it matches the inspected ref. Mark it unresolved if a reviewer needs to decide.
+- **Final delivery target** — when delivery is staged or the repository uses several landing branches, name the branch and repository where the complete fix counts as delivered. Record it separately from the immediate PR base. If that destination needs a decision, mark it unresolved.
+- **Decisions** — agreed choices, assumptions, and open decisions that must be settled before implementation.
+- **Acceptance and verification** — checks the implementer can run or links to the relevant sections in the plan.
+
+For a planning PR, link the handoff in the PR description and keep the original issue reference visible. In the delivery, point to `$implement-plan <local-plan-path-or-planning-pr-url>` once the plan is agreed. Leave issue status and labels for implementation publication.
+
 When a visual artifact helps reviewers decide on a changed screen, layout, state, or interaction, read [Mockup rendering](references/mockups.md). Explain the omission when a mockup could reasonably be expected. Keep implementation, workflow/configuration changes, and local planner state out of the artifact set.
 
 Before publishing, verify artifact links and any rendered images, confirm the plan describes the inspected baseline, and ensure the remaining open decisions are review items the team can evaluate from the proposal. For a local request, report the artifact paths and stop. Otherwise follow [Draft PR publication](references/publication.md) and return the verified PR URL, planning route, and decisions for reviewers.

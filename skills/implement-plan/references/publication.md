@@ -1,0 +1,28 @@
+# Publish the implementation and update its issue
+
+Use this procedure when publication is authorized. Bind GitHub requests to the verified repository and push only to its confirmed remote or an authorized fork. Re-read the original issue, target base, and relevant PRs immediately before writing. Treat a moved base or changed draft head as a reason to inspect the new revision and reverify affected checks.
+
+## Choose the PR
+
+- **Resume publication** — Identify the same implementation by the original PR identity for a conversion, or by a verified head and plan provenance for a separate PR. If the published head, base, issue reference, and verification evidence match, continue at the first incomplete publication or tracking step without repeating implementation. If a push succeeded before metadata was updated, recover the reviewed plan from its pinned link or verified history and reconcile the existing PR before attempting a new one.
+- **Local plan** — Open one PR from the verified implementation branch. If the exact head or implementation already has an open PR, verify its identity and reuse it on a retry. Check for competing PRs by original issue, branch, and scope.
+- **Planning PR** — Prefer in-place conversion when the identified PR is open, in draft, still planning-only, and its branch and base support a clean implementation diff. Start from the verified draft head, preserve discussion and a link to the reviewed plan at its pinned revision, and push a fast-forward update. If the repo treats planning artifacts as review-only, remove only those introduced by the draft through the implementation commit. Recheck the resulting diff.
+- If conversion would require a history rewrite or the planning PR is already closed, create a separate PR when the intended base and scope are clear. Cross-reference the plan and implementation in the new PR. If an existing PR has been changed by someone else or already contains competing implementation, resolve ownership and scope before creating or mutating a PR. Never force-push a planning branch as part of conversion.
+
+When reusing a draft with a different publication base, inspect the prospective diff against that base before changing it. Retarget only to the authorized base when the diff remains clean and relevant review context can be preserved. Otherwise use a separate PR or report what needs a decision.
+
+## Publish and read back
+
+Use the repo's PR template and draft policy. Update the title and description for the implementation, including user-visible behavior, verification evidence and gaps, the parent PR when stacked, and plan provenance. Put a direct link to the original issue near the top. Use `Refs` with the link for stacked, preview, or partial work. Use `Closes #N` (or the repo-qualified equivalent) only when the PR targets the default branch, fully resolves the issue, and repo policy calls for auto-closing. Follow [GitHub's issue-linking rules](https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/linking-a-pull-request-to-an-issue). A body reference is sufficient for stacked work unless the repo requires a separate Development link.
+
+Carry the **Final delivery target** into the PR description when recorded, including an unresolved target. Check the actual target before using a closing keyword. If a verification record was needed, summarize it or link to reviewer-accessible evidence and identify the tested revision. Keep local-only records and private details out of the PR.
+
+Push the exact branch without force. Before creating, check for an existing PR on that head. Create or edit with explicit repository, head, and base selection as applicable. Default to ready for review after the applicable implementation and review gates pass. Honor a draft request or repo policy that requires draft. After an ambiguous response, look up the PR by its exact identity before retrying. Verify the final open state, draft state, base, head commit, changed files, and original issue reference through GitHub.
+
+## Update the original issue
+
+Update the issue only after verifying the implementation PR. Follow the repo's documented project, label, and automation conventions.
+
+1. Read the issue's current project status and labels. If automation already set the correct state, verify it and stop. When the PR is ready for review, prefer the tracked project's review status. Otherwise use an existing review label that matches repo policy, such as `status: in review`. For a draft, use the repo's draft or in-progress state if defined. A draft alone does not imply review readiness.
+2. Keep unrelated labels, assignment, and open or closed state. Replace a stale workflow label only when the repo defines its status labels as mutually exclusive. If the board is unavailable and no applicable label exists, use an explicitly authorized repo label mapping or report the tracking gap. Creation of a new repository-wide label requires user authorization or a repo policy that permits it.
+3. Read back the issue status or label. If the issue update fails, return the PR URL and the exact pending update. On retry, verify the existing PR and retry only the missing tracking step. Do not create a duplicate PR.

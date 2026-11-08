@@ -24,7 +24,11 @@ For CLI discovery, use `gh issue list --state open --repo HOST/OWNER/REPO --json
 
 ## Rank and select
 
-Exclude confirmed duplicates, work covered by an active implementation or planning PR, deferred items, issues with unresolved prerequisites, and issues whose scope depends on a maintainer decision or essential evidence that is still missing. Use the repo's actual label and assignment conventions. Check whether a high-priority issue can be approached as an explicitly agreed slice before deferring it. If there is no defensible eligible candidate, say what prevented selection and stop.
+Exclude confirmed duplicates, work covered by an active implementation or planning PR, deferred items, issues with unresolved prerequisites, and issues whose scope depends on a maintainer decision or essential evidence that is still missing. Use the repo's actual label and assignment conventions. Check whether a high-priority issue can be approached as an explicitly agreed slice before deferring it.
+
+Distinguish **planned** from **implementation in flight**. Verify that a matching planning PR contains only planning artifacts, using the diff and an exact issue reference. A draft flag alone is insufficient. Surface relevant planned issues separately with their planning PR links and the `$implement-plan <planning-pr-url>` handoff once the plan is agreed. Do this even if no unplanned candidate is eligible. Keep the requested ranking, review, or planning mode. This handoff is informational.
+
+If there is no defensible eligible candidate, say what prevented selection and stop after reporting any relevant planned issues.
 
 Rank eligible issues using these criteria in order. Apply repo-specific priority rules where they exist and cite the evidence for close calls.
 
@@ -47,4 +51,4 @@ Load and follow ECC's installed `issue-review` skill in the same session. Pass t
 
 Load and follow the installed `plan-pr` skill in the same session. If it is not surfaced by name, use the adjacent [plan-pr skill](../plan-pr/SKILL.md) when both are installed together. If it is unavailable, report the selected issue, the missing dependency, and the `$plan-pr <issue-url>` handoff with the target base and any requested notification recipient.
 
-Pass the canonical issue URL, target base, evidence for choosing it, and explicit notification recipient if provided. Let `plan-pr` choose its planning depth, produce any useful mockups, and own publication and notification. Respect any clarification or publication blocker it finds. Report the resulting draft URL or blocker alongside the shortlist. Leave issue assignment, labels, comments, and state alone.
+Pass the canonical issue URL, target base, evidence for choosing it, and explicit notification recipient if provided. Let `plan-pr` choose its planning depth, produce any useful mockups, and own publication and notification. Respect any clarification or publication blocker it finds. Report the resulting draft URL or blocker alongside the shortlist and point to `$implement-plan <planning-pr-url>` for the agreed draft. Leave issue assignment, labels, comments, and state alone.

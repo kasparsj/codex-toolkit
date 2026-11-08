@@ -48,6 +48,14 @@ You can also supply a chat link or ID to hand off work from a different chat.
 
 Use `--local` to keep the plan in the checkout. [Read the skill](skills/plan-pr/SKILL.md)
 
+## Implement an existing plan
+
+`$implement-plan` executes an agreed plan using a workflow sized to the work. It opens an implementation PR or converts the planning draft, links the original issue, and updates its review status or label after verifying publication.
+
+> $implement-plan https://github.com/owner/repo/pull/43
+
+You can also pass a local plan path. Use `--base <branch-or-pr>` to target a specific branch or stack, or `--local` to implement without publishing. [Read the skill](skills/implement-plan/SKILL.md)
+
 ## Choose the next issue
 
 `$next-issue` ranks the open issues in a GitHub repository and selects the best eligible candidate.
