@@ -3,8 +3,9 @@
 This directory contains a resumable, policy-bound delivery coordinator for the
 `next-issue` → `plan-pr` → `implement-plan` → `pr-closeout` sequence. It keeps
 agent work local and schema-validates its results; a deterministic publisher is
-the only component allowed to mutate GitHub. Use Python 3.11 or later on
-`PATH` as `python3`. The implementation uses the Python standard library.
+the only component allowed to mutate GitHub. Use macOS or Linux with Python
+3.11 or later on `PATH` as `python3`. The implementation uses the Python
+standard library.
 
 The executable boundary is intentional:
 

@@ -13,13 +13,13 @@ from __future__ import annotations
 import argparse
 import contextlib
 import datetime as dt
+import fcntl
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import secrets
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -81,15 +81,11 @@ def atomic_json(path: Path, value: dict[str, Any]) -> None:
 
 @contextlib.contextmanager
 def mutex(path: Path) -> Iterator[None]:
-    try:
-        path.mkdir(parents=True)
-    except FileExistsError as exc:
-        raise DeliveryError(f"delivery mutex busy: {path}") from exc
-    try:
-        atomic_json(path / "owner.json", {"pid": os.getpid(), "created_at": utc_now()})
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+    with os.fdopen(fd, "rb") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
         yield
-    finally:
-        shutil.rmtree(path, ignore_errors=True)
 
 
 def utc_now() -> str:
@@ -381,7 +377,7 @@ class Coordinator:
               skills_root: Path, delivery_id: str | None = None) -> dict[str, Any]:
         validate_repo(repo)
         repo_dir = self._repo_dir(repo)
-        with mutex(repo_dir / "mutex"):
+        with mutex(repo_dir / "claim.lock"):
             active_path = repo_dir / "active.json"
             if active_path.exists():
                 active = read_json(active_path)
@@ -414,11 +410,14 @@ class Coordinator:
         atomic_json(self._delivery_path(state["repo"], state["delivery_id"]), state)
 
     def release(self, state: dict[str, Any]) -> None:
-        active_path = self._repo_dir(state["repo"]) / "active.json"
-        active = read_json(active_path)
-        require(active.get("delivery_id") == state["delivery_id"], "active claim identity changed")
-        atomic_json(active_path, {"delivery_id": state["delivery_id"], "repo": state["repo"],
-            "issue": state.get("issue"), "status": "released", "released_at": utc_now()})
+        repo_dir = self._repo_dir(state["repo"])
+        active_path = repo_dir / "active.json"
+        with mutex(repo_dir / "claim.lock"):
+            active = read_json(active_path)
+            if active.get("delivery_id") != state["delivery_id"] or active.get("status") == "released":
+                return
+            atomic_json(active_path, {"delivery_id": state["delivery_id"], "repo": state["repo"],
+                "issue": state.get("issue"), "status": "released", "released_at": utc_now()})
 
     def verify_resume(self, state: dict[str, Any], skills_root: Path) -> None:
         require(skill_hashes(skills_root) == state["skill_hashes"], "pinned skill source changed")
@@ -597,6 +596,8 @@ def run_successor(coordinator: Coordinator, state: dict[str, Any]) -> dict[str, 
     state = coordinator.load(state["repo"], state["delivery_id"])
     state.update(runner=result, runner_status=result["status"], runner_pid=None,
                  runner_run_id=result["run_id"])
+    if result["status"] == "completed" and state["status"] in ("completed", "review_ready"):
+        coordinator.release(state)
     coordinator.save(state)
     return state
 

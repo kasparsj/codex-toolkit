@@ -175,6 +175,9 @@ print(json.dumps({'schema_version':1,'kind':p['kind'],'delivery_id':p['delivery_
         interrupted["runner_status"] = "running"
         interrupted["runner_pid"] = None
         empty_state.write_text(json.dumps(interrupted))
+        claim = json.loads(empty_active.read_text())
+        claim["status"] = "active"  # Interrupt after saving terminal state, before releasing the claim.
+        empty_active.write_text(json.dumps(claim))
         recover_empty = [sys.executable, str(WORKFLOW / "delivery.py"), "recover",
             "--state-dir", str(root / "empty-state"), "--repo", "github.test/acme/empty",
             "--delivery-id", "pinned-empty", "--skills-root", str(ROOT / "skills")]
@@ -186,6 +189,13 @@ print(json.dumps({'schema_version':1,'kind':p['kind'],'delivery_id':p['delivery_
         assert empty["runner_run_id"] != interrupted_run_id, empty
         assert rank_log.read_text().splitlines() == ["rank"]
         assert json.loads(empty_active.read_text())["status"] == "released"
+        newer_claim = {**claim, "delivery_id": "new-delivery"}
+        empty_active.write_text(json.dumps(newer_claim))
+        interrupted["runner_run_id"] = empty["runner_run_id"]
+        empty_state.write_text(json.dumps(interrupted))
+        completed = subprocess.run(recover_empty, text=True, capture_output=True, check=True)
+        assert json.loads(completed.stdout)["runner"]["status"] == "completed"
+        assert json.loads(empty_active.read_text()) == newer_claim
         print(json.dumps({"runner": result["runner"]["status"], "delivery": result["status"]}, sort_keys=True))
         return 0
 
