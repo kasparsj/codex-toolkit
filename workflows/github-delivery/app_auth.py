@@ -296,7 +296,7 @@ class GitHubAppApi:
             f"https://api.github.com{path}", data=data, method=method,
             headers={
                 "Accept": "application/vnd.github+json",
-                "Authorization": f"Bearer {token}",
+                **({"Authorization": f"Bearer {token}"} if token else {}),
                 "X-GitHub-Api-Version": "2022-11-28",
                 "User-Agent": "github-delivery-app-auth/1",
                 **({"Content-Type": "application/json"} if data is not None else {}),

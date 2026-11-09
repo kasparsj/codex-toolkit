@@ -72,7 +72,7 @@ def _labels(value: Any, name: str) -> list[str]:
     return sorted(value)
 
 
-def _validate_profile(profile: dict[str, Any], default_branch: str) -> None:
+def _validate_profile(profile: dict[str, Any], default_branch: str, *, allow_publisher_review: bool) -> None:
     require(isinstance(profile, dict), "operator profile must be an object")
     require(profile.get("version") == 1, "operator profile version must be 1")
     require(isinstance(default_branch, str) and default_branch, "verified default branch required")
@@ -108,7 +108,7 @@ def _validate_profile(profile: dict[str, Any], default_branch: str) -> None:
     publisher = delivery.get("publisher_id")
     if publisher is not None:
         require(type(publisher) is int and publisher > 0, "invalid operator publisher_id")
-        require(all(publisher not in approvals[stage]["reviewer_ids"]
+        require(allow_publisher_review or all(publisher not in approvals[stage]["reviewer_ids"]
                     for stage in ("plan", "implementation")),
                 "publisher cannot be an authorized reviewer")
 
@@ -159,7 +159,8 @@ def _validate_override_shape(override: dict[str, Any], operator: dict[str, Any],
 
 
 def resolve(profile: dict[str, Any], *, default_branch: str, base_sha: str,
-            override_bytes: bytes | None, contents_access_verified: bool) -> dict[str, Any]:
+            override_bytes: bytes | None, contents_access_verified: bool,
+            allow_publisher_review: bool = False) -> dict[str, Any]:
     """Resolve immutable defaults plus one constrained repository override."""
     require(contents_access_verified, "pinned repository contents access was not established")
     require(isinstance(base_sha, str) and FULL_SHA.fullmatch(base_sha) is not None,
@@ -168,7 +169,7 @@ def resolve(profile: dict[str, Any], *, default_branch: str, base_sha: str,
     for table, key in (("delivery", "final_target"), ("branches", "default_parent")):
         if isinstance(normalized.get(table), dict) and normalized[table].get(key) in (None, "$default"):
             normalized[table][key] = default_branch
-    _validate_profile(normalized, default_branch)
+    _validate_profile(normalized, default_branch, allow_publisher_review=allow_publisher_review)
     limits = _constraints(normalized)
     values = deepcopy({key: value for key, value in normalized.items() if not key.startswith("_")})
     profile_digest = digest(canonical_json(profile))
@@ -233,7 +234,7 @@ def resolve(profile: dict[str, Any], *, default_branch: str, base_sha: str,
 
 
 def resolve_at(profile: dict[str, Any], *, default_branch: str, base_sha: str,
-               read: Callable[..., Any]) -> dict[str, Any]:
+               read: Callable[..., Any], allow_publisher_review: bool = False) -> dict[str, Any]:
     """Read the optional policy at a pinned commit, then use ``resolve``.
 
     ``read`` accepts a repository-relative REST endpoint and ``missing=True``.
@@ -254,7 +255,8 @@ def resolve_at(profile: dict[str, Any], *, default_branch: str, base_sha: str,
         except ValueError as exc:
             raise PolicyResolutionError("invalid repository delivery policy encoding") from exc
     return resolve(profile, default_branch=default_branch, base_sha=base_sha,
-                   override_bytes=override, contents_access_verified=True)
+                   override_bytes=override, contents_access_verified=True,
+                   allow_publisher_review=allow_publisher_review)
 
 
 def summary(values: dict[str, Any]) -> dict[str, Any]:

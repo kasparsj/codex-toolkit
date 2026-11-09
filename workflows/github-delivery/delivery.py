@@ -49,6 +49,10 @@ class DeliveryError(RuntimeError):
     pass
 
 
+def protected_delivery(state: dict[str, Any]) -> bool:
+    return state.get("credential_mode") in {"app", "manual"}
+
+
 def canonical_json(value: Any) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
 
@@ -224,7 +228,7 @@ def adapter_hashes() -> dict[str, str]:
     names = ("delivery.py", "adapter.py", "publisher_adapter.py", "publisher.py",
              "trusted_git.py", "workflow.yaml", "app_auth.py", "agent_isolation.py",
              "fixtures/delivery-fixture.yml", "local_verifier.py",
-             "preview.py", "onboarding.py", "effective_policy.py", "discovery.py")
+             "preview.py", "onboarding.py", "effective_policy.py", "discovery.py", "manual.py")
     return {name: digest_bytes((root / name).read_bytes()) for name in names}
 
 
@@ -345,14 +349,14 @@ def run_spec_kit(state: dict[str, Any], state_dir: Path, *, run_id: str | None =
                            ("run_implementation", str("implement" not in manifests).lower()),
                            ("publish_implementation", str("implementation" not in publication).lower()),
                            ("finalize", str("final" not in publication).lower()),
-                           ("agent_closeout", str(state.get("credential_mode") != "app").lower()),
+                           ("agent_closeout", str(not protected_delivery(state)).lower()),
                            ("plan_gate", str(plan_gate).lower()),
                            ("implementation_gate", str(implementation_gate).lower())):
             argv += ["--input", f"{key}={value}"]
     if plan_verdict: argv += ["--input", f"plan_verdict={plan_verdict}"]
     if implementation_verdict: argv += ["--input", f"implementation_verdict={implementation_verdict}"]
     extra = {}
-    if state.get("credential_mode") == "app":
+    if protected_delivery(state):
         require(execution_fd is not None, "App runner requires the repository execution lock")
         argv = [sys.executable, __file__, "_hold-lock", str(execution_fd), *argv]
         env = {key: os.environ[key] for key in ("PATH", "HOME", "LANG", "LC_ALL",
@@ -371,7 +375,7 @@ def run_spec_kit(state: dict[str, Any], state_dir: Path, *, run_id: str | None =
 
 def evaluate_reviews(reviews: list[dict[str, Any]], *, stage: str, generation: int,
                      context_digest: str, commit_id: str, authorized_ids: list[int],
-                     publisher_id: int, minimum: int, require_human: bool = False) -> dict[str, Any]:
+                     publisher_id: int | None, minimum: int, require_human: bool = False) -> dict[str, Any]:
     expected = {review_body(stage, generation, context_digest, d): d for d in ("approve", "reject")}
     latest: dict[int, tuple[str, int, str]] = {}
     for review in reviews:
@@ -415,7 +419,8 @@ class Coordinator:
 
     def start(self, *, repo: str, issue: int | None, policy: dict[str, Any],
               skills_root: Path, delivery_id: str | None = None, agent: dict[str, str] | None = None,
-              publisher_launcher: str | None = None, app: dict[str, Any] | None = None) -> dict[str, Any]:
+              publisher_launcher: str | None = None, app: dict[str, Any] | None = None,
+              manual: dict[str, Any] | None = None) -> dict[str, Any]:
         validate_repo(repo)
         repo_dir = self._repo_dir(repo)
         with mutex(repo_dir / "claim.lock"):
@@ -442,6 +447,8 @@ class Coordinator:
                 state.update(agent=agent, publisher_launcher=publisher_launcher)
             if app is not None:
                 state.update(credential_mode="app", app=app)
+            if manual is not None:
+                state.update(credential_mode="manual", manual=manual)
             atomic_json(self._delivery_path(repo, stable), state)
             atomic_json(active_path, claim)  # durable, loadable claim precedes candidate selection
             return state
@@ -454,7 +461,7 @@ class Coordinator:
 
     @contextlib.contextmanager
     def runner_step(self, state: dict[str, Any]) -> Iterator[dict[str, Any]]:
-        if state.get("credential_mode") != "app":
+        if not protected_delivery(state):
             yield state
             return
         with mutex(self._repo_dir(state["repo"]) / "step.lock"):
@@ -479,7 +486,7 @@ class Coordinator:
 
     def accept_manifest(self, state: dict[str, Any], manifest: dict[str, Any]) -> dict[str, Any]:
         kind = manifest.get("kind")
-        if state.get("credential_mode") == "app":
+        if protected_delivery(state):
             require(kind in ("plan", "implement"), "App delivery only accepts plan and implementation manifests")
             expected_status = {"plan": "plan_required", "implement": "implementation_required"}
             require(state["status"] == expected_status[kind], "App manifest is out of order")
@@ -563,8 +570,10 @@ class Coordinator:
         paused_review = state["runner_status"] == "paused" and current_step == f"{stage}-review"
         failed_update = (pending is not None and state["runner_status"] == "failed"
                          and current_step == f"publish-{stage}")
-        require((paused_review or failed_update) and state["status"] == f"{stage}_review",
-                f"correction requires a paused {stage} review or failed correction publication")
+        verifier_blocked = (state.get("credential_mode") == "manual" and stage == "implementation"
+                            and state["status"] in {"pre_ready_ci_blocked", "pre_ready_ci_waiting"})
+        require(verifier_blocked or ((paused_review or failed_update) and state["status"] == f"{stage}_review"),
+                f"correction requires a paused {stage} review, failed update, or blocked developer verification")
         validate_manifest(manifest, kind)
         require(manifest["delivery_id"] == state["delivery_id"] and manifest["repo"] == state["repo"],
                 "correction delivery or repository mismatch")
@@ -590,12 +599,14 @@ class Coordinator:
         state["receipts"].pop(stage, None)
         if stage == "implementation":
             state.pop("actions_deferred_head", None)
+        if verifier_blocked:
+            state["publication"].pop("progress", None)
         state["attempt"] += 1
         state["runner_status"] = "idle"
         state["runner_pid"] = None
         state["history"].append({"event": f"{stage}_correction", "previous_run_id": state["runner_run_id"],
                                  "attempt": state["attempt"], "at": utc_now()})
-        if state.get("credential_mode") == "app":
+        if protected_delivery(state):
             state["status"] = f"{stage}_required"
         return self.accept_manifest(state, manifest)
 
@@ -645,6 +656,7 @@ def parser() -> argparse.ArgumentParser:
     preview.add_argument("--documentation-only", action="store_true")
     preview.add_argument("--operator-app", type=Path)
     preview.add_argument("--operator-policy", type=Path)
+    preview.add_argument("--developer-config", type=Path)
     discover = sub.add_parser("discover", help="discover selected GitHub App repositories")
     discover.add_argument("repo", nargs="?")
     discover.add_argument("--operator-app", type=Path, required=True)
@@ -660,6 +672,7 @@ def parser() -> argparse.ArgumentParser:
     start.add_argument("--app-config", type=Path)
     start.add_argument("--operator-app", type=Path)
     start.add_argument("--operator-policy", type=Path)
+    start.add_argument("--developer-config", type=Path)
     start.add_argument("--container-image")
     start.add_argument("--worktree", type=Path, required=True); start.add_argument("--agent-scratch", type=Path, required=True)
     for name in ("status", "resume", "recover", "advance"):
@@ -668,6 +681,7 @@ def parser() -> argparse.ArgumentParser:
         if name in ("resume", "recover"): cmd.add_argument("--skills-root", type=Path, required=True)
         if name == "resume":
             cmd.add_argument("--result", type=Path)
+            cmd.add_argument("--pr", type=int, help="bind the developer-published planning draft")
             cmd.add_argument("--defer-actions-verification", action="store_true")
         if name == "advance": cmd.add_argument("--stage", choices=("plan", "implementation"), required=True)
     return result
@@ -694,7 +708,7 @@ def run_successor(coordinator: Coordinator, state: dict[str, Any]) -> dict[str, 
 
 
 def require_runner_lease(state: dict[str, Any]) -> None:
-    if state.get("credential_mode") == "app":
+    if protected_delivery(state):
         require(state["runner_status"] == "running" and bool(state.get("runner_lease"))
                 and state["runner_lease"] == os.environ.get("DELIVERY_RUNNER_LEASE"),
                 "App workflow step requires the active repository execution lease")
@@ -723,7 +737,19 @@ def app_view(coordinator: Coordinator, state: dict[str, Any]) -> dict[str, Any]:
 
     value = {key: state.get(key) for key in ("repo", "issue", "delivery_id", "status", "attempt",
                                              "runner_status", "runner_run_id", "policy")}
-    value["identity"] = state["app"].get("identity")
+    manual = state.get("manual")
+    value["identity"] = manual["identity"] if manual else state["app"].get("identity")
+    if manual:
+        value["credential_mode"] = "manual"
+        if handoff := state.get("manual_handoff"):
+            value["manual_handoff"] = handoff
+            if handoff["stage"] not in state.get("publication", {}):
+                value["status"] = f"{handoff['stage']}_publication_pending"
+        if state["status"] == "manual_ready_pending":
+            value["operator_action"] = "mark_pr_ready"
+        if state["status"] == "tracking_pending":
+            value["operator_action"] = "apply_issue_label"
+            value["review_label"] = state["policy_values"]["tracking"]["review_label"]
     value["receipts"] = state["receipts"]
     value["require_github_actions"] = state["policy_values"]["delivery"].get(
         "require_github_actions", True,
@@ -818,6 +844,7 @@ def start_app(coordinator: Coordinator, args, policy: dict[str, Any], agent: dic
 
 
 def resume_app(coordinator: Coordinator, args) -> dict[str, Any]:
+    import manual
     import publisher_adapter
 
     with mutex(coordinator._repo_dir(args.repo) / "execution.lock") as execution_fd:
@@ -828,7 +855,14 @@ def resume_app(coordinator: Coordinator, args) -> dict[str, Any]:
                 coordinator.release(state)
                 return state
             app_claim(coordinator, state)
+            developer = state.get("credential_mode") == "manual"
+            pr_number = getattr(args, "pr", None)
+            require(pr_number is None or developer, "--pr requires developer-mediated mode")
+            bound_plan = state.get("publication", {}).get("plan")
+            if developer and pr_number is not None and bound_plan:
+                require(pr_number == bound_plan["pr"]["number"], "supplied PR differs from the bound draft")
             defer_actions = getattr(args, "defer_actions_verification", False)
+            require(not developer or not defer_actions, "developer-mediated mode requires verification")
             if defer_actions:
                 require(not state["app"].get("operator_app"), "M2 requires trusted verification")
                 require(state["policy_values"]["delivery"].get("require_github_actions", True),
@@ -843,13 +877,16 @@ def resume_app(coordinator: Coordinator, args) -> dict[str, Any]:
                 require(not pid or not _pid_alive(pid), "old runner process is still alive")
             else:
                 require(state["runner_status"] != "running", "interrupted App runner requires recover")
-            app_preflight(state)
+            if developer:
+                manual.Session.from_state(state).check_context(state)
+            else:
+                app_preflight(state)
             if recovering:
                 state.pop("runner_lease", None)
                 state = coordinator.recover(state, old_pid_alive=False)
         if getattr(args, "result", None):
             state = coordinator.accept_correction(state, read_json(args.result))
-        if state["status"] in APP_FINALIZING:
+        if state["status"] in APP_FINALIZING | {"manual_ready_pending"}:
             state = publisher_adapter.finalize(state, Path(state["publisher_launcher"]), coordinator.save)
             state.update(runner_status="completed", runner_pid=None)
             state.pop("runner_lease", None)
@@ -861,6 +898,10 @@ def resume_app(coordinator: Coordinator, args) -> dict[str, Any]:
             stage = {"plan-review": "plan", "implementation-review": "implementation"}.get(
                 state.get("runner", {}).get("current_step_id"))
             require(stage is not None, "unknown App approval gate")
+            if developer:
+                manual.reconcile(state, stage, pr_number, coordinator.save)
+                if stage not in state.get("publication", {}):
+                    return state
             state, verdict = publisher_adapter.check_approval(state, Path(state["publisher_launcher"]), stage)
             coordinator.save(state)
             if verdict != "approve":
@@ -927,7 +968,13 @@ def main(argv: list[str] | None = None) -> int:
                 value = {"status": "discovered", **inventory.evidence()}
                 print(json.dumps(value, sort_keys=True))
                 return 0
-            if args.operator_app or args.operator_policy:
+            if args.developer_config:
+                import manual
+
+                require(not (args.operator_app or args.operator_policy or args.provisional_policy
+                             or args.documentation_only), "developer preview uses its configured policy")
+                value = manual.Session(args.developer_config, name).preview()
+            elif args.operator_app or args.operator_policy:
                 require(args.operator_policy is not None and args.provisional_policy is None
                         and not args.documentation_only,
                         "operator-policy preview does not accept legacy rehearsal filters")
@@ -948,6 +995,12 @@ def main(argv: list[str] | None = None) -> int:
             return 2 if value["status"] == "coverage_incomplete" else 0
         coordinator = Coordinator(args.state_dir)
         if args.command == "start":
+            if args.developer_config:
+                import manual
+
+                value = manual.start(coordinator, args)
+                print(json.dumps(app_view(coordinator, value), sort_keys=True))
+                return 0
             if args.operator_app:
                 policy = resolve_app_start(coordinator, args)
             else:
@@ -978,12 +1031,13 @@ def main(argv: list[str] | None = None) -> int:
                 require(active_path.is_file(), "no delivery recorded for repository")
                 args.delivery_id = read_json(active_path)["delivery_id"]
             value = coordinator.load(args.repo, args.delivery_id)
-            if value.get("credential_mode") == "app" and args.command in ("resume", "recover", "status"):
+            if protected_delivery(value) and args.command in ("resume", "recover", "status"):
                 if args.command != "status":
                     value = resume_app(coordinator, args)
                 print(json.dumps(app_view(coordinator, value), sort_keys=True))
                 return 0
             require(not getattr(args, "defer_actions_verification", False), "Actions deferral requires App mode")
+            require(getattr(args, "pr", None) is None, "--pr requires developer-mediated mode")
             if args.command == "resume":
                 coordinator.verify_resume(value, args.skills_root)
                 if args.result:
@@ -1030,7 +1084,7 @@ def main(argv: list[str] | None = None) -> int:
                     expected = "plan_review" if args.stage == "plan" else "implementation_review"
                     target = "implementation_required" if args.stage == "plan" else "publication_pending"
                     require(value["status"] == expected, f"cannot advance {args.stage} from {value['status']}")
-                    if value.get("credential_mode") == "app":
+                    if protected_delivery(value):
                         import publisher_adapter
 
                         value, verdict = publisher_adapter.check_approval(

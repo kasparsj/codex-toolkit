@@ -46,9 +46,9 @@ def installed_reader(profile, name):
         session.revoke(discovery.api)
 
 
-def resolve(profile, repo, branch, sha, reader):
+def resolve(profile, repo, branch, sha, reader, *, allow_publisher_review=False):
     return effective_policy.resolve_at(
-        profile, default_branch=branch, base_sha=sha,
+        profile, default_branch=branch, base_sha=sha, allow_publisher_review=allow_publisher_review,
         read=lambda endpoint, **kw: reader(f"repos/{repo}{endpoint}", **kw),
     )["values"]
 

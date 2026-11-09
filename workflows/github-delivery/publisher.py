@@ -754,7 +754,7 @@ class Publisher:
                 delivery.require(pr[field] == expected_pr[field], f"reviewed PR {field} changed")
         delivery.require(pr["state"] == "OPEN", "reviewed PR is not open")
         reviews = self._reviews(pr["number"])
-        if packet.get("credential_mode") == "app":
+        if delivery.protected_delivery(packet):
             authorized = set(evidence["reviewer_ids"])
             for review in reviews:
                 user = review.get("user", {})
@@ -778,9 +778,10 @@ class Publisher:
             context_digest=evidence["context_digest"],
             commit_id=expected_pr["head_sha"],
             authorized_ids=evidence["reviewer_ids"],
-            publisher_id=packet["policy_values"]["delivery"]["publisher_id"],
+            publisher_id=(None if packet.get("credential_mode") == "manual" else
+                          packet["policy_values"]["delivery"]["publisher_id"]),
             minimum=evidence["minimum"],
-            require_human=packet.get("credential_mode") == "app",
+            require_human=delivery.protected_delivery(packet),
         )
         delivery.require(verdict["approved"], f"{evidence['stage']} approval is not current")
 
@@ -1397,10 +1398,15 @@ class Publisher:
 
     def _local_verification(self, packet: dict[str, Any], pr: dict[str, Any]) -> dict[str, Any]:
         profile = self._local_profile()
+        return self.verify_local_revision(packet, pr, profile, packet["app_binding_digest"])
+
+    def verify_local_revision(self, packet, pr, profile, binding_digest):
         scope = {"repo": self.repo, "delivery_id": packet["delivery_id"], "pr_number": pr["number"],
                  "head_sha": pr["head_sha"], "base_sha": pr["base_sha"],
                  "policy_digest": packet["policy"]["digest"],
-                 "binding_digest": packet["app_binding_digest"]}
+                 "binding_digest": binding_digest,
+                 **({"pr_node_id": pr["node_id"], "repository_id": pr["base_repo_id"]}
+                    if packet.get("credential_mode") == "manual" else {})}
         key = delivery.digest_bytes(delivery.canonical_json(scope))
         receipt = self.root / "local-verification" / f"{key}.json"
         if receipt.exists():

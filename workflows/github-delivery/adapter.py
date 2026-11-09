@@ -52,7 +52,7 @@ def run_agent(*, launcher: Path, kind: str, state: dict, skills_root: Path,
 
         _, verdict = check_approval(state, Path(state["publisher_launcher"]), "plan")
         delivery.require(verdict == "approve", "current plan approval required before implementation")
-    app_mode = state.get("credential_mode") == "app"
+    app_mode = delivery.protected_delivery(state)
     profile = None
     packet_worktree = worktree
     packet_scratch = scratch
@@ -113,7 +113,7 @@ def main(argv=None) -> int:
     try:
         coordinator = delivery.Coordinator(args.state_dir); state = coordinator.load(args.repo, args.delivery_id)
         with coordinator.runner_step(state) as state:
-            if state.get("credential_mode") == "app":
+            if delivery.protected_delivery(state):
                 persisted = state["agent"]
                 supplied = {"launcher": str(args.launcher.resolve()),
                             "worktree": str(args.worktree.resolve()),

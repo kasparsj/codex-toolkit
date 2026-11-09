@@ -265,7 +265,7 @@ def rank(api, repo, issues, pulls, policy, documentation_only=False, *, reader=r
     return eligible, excluded, unresolved
 
 
-def scan(repo, policy, documentation_only=False, *, reader=read):
+def scan(repo, policy, documentation_only=False, *, reader=read, own_pr=None):
     api = f"repos/{repo}"
     issues = numbered([row for row in listing(f"{api}/issues", state="open", reader=reader) if "pull_request" not in row])
     pulls = numbered(listing(f"{api}/pulls", state="open", reader=reader))
@@ -275,6 +275,11 @@ def scan(repo, policy, documentation_only=False, *, reader=read):
     require(all(pr.get("state") == "open" and type(pr.get("draft")) is bool
                 and isinstance(pr["head"]["ref"], str) and SHA.fullmatch(pr["head"]["sha"])
                 for pr in pulls.values()), "unreadable open PR inventory")
+    if own_pr is not None:
+        own = pulls.get(own_pr["number"])
+        require(own is not None and own.get("node_id") == own_pr["node_id"],
+                "bound draft disappeared during competing PR scan")
+        del pulls[own_pr["number"]]
     inventory = {"open_issues": len(issues),
                  "unlabeled_issues": sum(not labels(i) for i in issues.values()),
                  "open_pull_requests": len(pulls),
@@ -289,8 +294,8 @@ def effective_filters(policy):
             "excluded_labels": sorted(set(eligibility["excluded_labels"]) | {label})}
 
 
-def verify_candidate(repo, issue, policy, *, reader):
-    _, ranked, excluded, unresolved = scan(repo, effective_filters(policy), reader=reader)
+def verify_candidate(repo, issue, policy, *, reader, own_pr=None):
+    _, ranked, excluded, unresolved = scan(repo, effective_filters(policy), reader=reader, own_pr=own_pr)
     if issue is None:
         require(ranked and not unresolved, "cannot select a winner: no candidate or incomplete coverage")
         return ranked[0]["number"]

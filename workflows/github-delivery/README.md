@@ -509,3 +509,87 @@ revision. The fixture-only `--defer-actions-verification` switch is
 incompatible with local verification. This policy selects the runner's
 evidence source. GitHub Actions scheduling and GitHub branch rules are
 managed separately.
+
+## Developer-mediated delivery
+
+Use this mode for same-repository collaboration on GitHub.com. The developer
+publishes both commits to one branch and manages the same draft through both
+reviews. The runner performs GitHub GETs and prepares verified local bundles.
+The developer controls pushes, PR creation and edits, marking ready, applying
+the existing issue label, and any subsequent merge.
+
+Create an owner-only JSON configuration with an absolute path to the protected
+state directory and the repository's canonical name and numeric ID. Set
+`policy` to the [M2 operator defaults](#install-only-onboarding-m2)
+with these settings:
+
+- `delivery.publisher_id` is the developer's numeric GitHub user ID.
+- `delivery.require_github_actions` is false. This mode uses the pinned local
+  verifier. Set `local_verifier` at the top level to the same `image`, `argv`
+  and `audited_workflows` fields used by App local verification.
+- Both approval stages require an allowlisted human. An allowlisted developer
+  may review their own draft in this mode. Each stage needs a separate submitted
+  GitHub Comment review bound to its exact commit and context.
+- Set `allowed_path_prefixes` at the top level to an array of exact paths and
+  directory prefixes ending in `/`. Review the list for privileged inputs.
+  The runner rejects changes under `.github/`, including changes later reverted
+  within the candidate history.
+
+The other top-level keys are `repository`, `repository_id`, and `state_dir`.
+Public repositories use anonymous reads by default. Set `"read_auth": "gh"`
+to use the signed-in GitHub CLI credential for trusted REST GETs only. Public
+Git fetches stay anonymous with this option. For private Git fetches, supply
+`read_token_file` pointing to an owner-only fine-grained GitHub token with read
+permissions for the one repository's metadata, contents, issues, and pull
+requests. The operator provisions those grants. The token stays on the trusted
+read and fetch side. The agent and verifier containers receive a clean
+environment and have no network.
+
+Run preview and explicit start with the same configuration:
+
+```sh
+python3 workflows/github-delivery/delivery.py run OWNER/REPO --preview \
+  --developer-config /absolute/path/developer.json
+python3 workflows/github-delivery/delivery.py start --repo OWNER/REPO --issue NUMBER \
+  --developer-config /absolute/path/developer.json --state-dir /absolute/path/state \
+  --skills-root /absolute/path/skills --agent-launcher /absolute/path/launcher \
+  --worktree /absolute/path/dedicated-checkout --agent-scratch /absolute/path/scratch \
+  --container-image IMAGE@sha256:DIGEST
+```
+
+Use the App runner's dedicated-checkout and container setup for the isolated
+launcher. Preview and start use the same M2 issue ranking and eligibility
+checks. The shortlist identifies issues with sufficient individual evidence.
+Preview reports incomplete global coverage separately if another issue is
+unresolved.
+
+At each publication pause, `status` returns `manual_handoff` with a protected
+bundle, its candidate ref and expected SHA, the remote URL, branch, exact base
+SHA, and draft title and body. Fetch the bundle into a separate operator
+checkout with the pinned base, verify its SHA, and push that SHA. For the first
+stage create the draft and pass its number to `resume --pr NUMBER`. The runner
+binds that PR's numeric and node identities, author, repositories, refs, and
+revisions. For the next stage fast-forward the same branch from the prior head
+and update the same draft with the new title and body. Resume reads it back and
+returns the exact Comment review body for that stage. Resume again after each
+submitted review. Use the same `--repo`, `--state-dir`, and `--skills-root`
+on resume.
+
+Trusted verification runs against the approved implementation head. A pending
+or blocked verifier keeps the claim and draft. Resume retries verification
+of that revision. A candidate fix can be supplied as a correction with
+`resume --result MANIFEST` and the corresponding implementation bundle in
+agent scratch. The fix extends the previously published head, receives a fresh
+handoff and needs a fresh implementation review. After successful verification,
+the runner first asks the developer to mark the exact draft ready. Resume reads
+that back and asks for the tracking label on the source issue. Resume after the
+label to record review-ready and release the claim.
+
+The claim and process locks cover the canonical repository within one protected
+state directory on one host. Point both modes at that same state directory to
+share the claim. This boundary cannot serialize other hosts, other state roots,
+or direct GitHub actions. The runner reads back the manual actions and blocks on
+unexpected changes. A policy, base, issue scope, or identity change can require
+operator reconciliation. Fork publication is deferred. Supporting it would
+require binding the fork's repository and owner IDs, verifying its parent,
+and separately checking its head ref and SHA against the PR's base repository.
