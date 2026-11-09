@@ -184,6 +184,7 @@ class AppRecoveryTest(unittest.TestCase):
             lose_response(impl, "push")
             lose_response(impl, "pr_update")
             impl_pr = execute(impl)["pr"]
+            self.assertEqual(client.prs[impl_pr["number"]]["title"], "chore: implement issue #42")
             self.assertEqual(impl_pr["node_id"], plan_pr["node_id"])
             self.assertEqual(impl_pr["head_sha"], impl_expected["head_sha"])
             impl_approval = approve(impl_pr, "implementation", "2" * 64, 11)
