@@ -130,6 +130,17 @@ class DeliveryTest(unittest.TestCase):
                 source_ref="refs/remotes/origin/main", source_sha="a" * 40,
                 fetched_at=self.now.isoformat(), now=self.now)
 
+    def test_require_github_actions_must_be_a_boolean(self):
+        for setting in ("false", '"false"'):
+            policy = POLICY.replace("[delivery]", f"[delivery]\nrequire_github_actions = {setting}")
+            self.policy_path.write_text(policy)
+            self.digest = delivery.digest_bytes(self.policy_path.read_bytes())
+            if setting == "false":
+                self.assertIs(self.policy()["delivery"]["require_github_actions"], False)
+            else:
+                with self.assertRaisesRegex(delivery.DeliveryError, "require_github_actions must be a boolean"):
+                    self.policy()
+
     def test_review_head_base_and_rejection(self):
         context = delivery.review_context(stage="plan", generation=1, issue=42,
             material_hashes={"plan.md": "1" * 64}, baseline_sha="b" * 40,

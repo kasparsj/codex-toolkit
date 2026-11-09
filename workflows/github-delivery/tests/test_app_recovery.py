@@ -47,6 +47,7 @@ class AppGitHub(FakeClient):
         self.pushes = []
         self.branch_protected = False
         self.review_label_exists = True
+        self.workflow_entries = [{"path": ".github/workflows/test.yml", "type": "file"}]
 
     def workflow(self):
         return {"id": 17, "path": ".github/workflows/test.yml", "state": "active"}
@@ -73,6 +74,8 @@ class AppGitHub(FakeClient):
             return self.workflow()
         if "/contents/.github/workflows/test.yml?" in endpoint:
             return {"encoding": "base64", "content": base64.b64encode(self.workflow_content).decode()}
+        if "/contents/.github/workflows?" in endpoint:
+            return self.workflow_entries
         return super().api(method, repo, endpoint, payload)
 
     def paginated(self, repo, endpoint):
@@ -100,21 +103,41 @@ class AppGit(FakeTrustedGit):
 
 class AppRecoveryTest(unittest.TestCase):
     def test_both_generations_and_every_interrupted_write_reuse_one_pr(self):
+        self.exercise_recovery(require_github_actions=True)
+
+    def test_repository_can_use_local_verification_before_tracking(self):
+        self.exercise_recovery(require_github_actions=False)
+
+    def exercise_recovery(self, *, require_github_actions):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             client = AppGitHub()
+            policy = POLICY
+            if not require_github_actions:
+                policy = policy.replace(b'final_target = "main"', b'final_target = "main"\n'
+                                        b'require_github_actions = false')
+                client.policy = policy
+                client.workflow_content = client.workflow_content.replace(b"Delivery fixture", b"Audited workflow")
             session = Session()
             session.binding = copy.copy(session.binding)
             session.binding.repository_id = 77
             session.binding.ci = {**session.binding.ci,
                                   "required_job": "verify-fixture",
                                   "workflow_sha256": hashlib.sha256(client.workflow_content).hexdigest()}
+            if not require_github_actions:
+                session.binding.local_verifier = {
+                    "image": "fixture@sha256:" + "a" * 64,
+                    "argv": ["/bin/test", "-s", "docs/greeting.md"],
+                    "audited_workflows": {".github/workflows/test.yml": hashlib.sha256(
+                        client.workflow_content).hexdigest()},
+                }
+                session.binding.ci = None
             source = {"ref": "refs/heads/main", "sha": client.base_sha,
-                      "digest": hashlib.sha256(POLICY).hexdigest()}
+                      "digest": hashlib.sha256(policy).hexdigest()}
             common = {"schema_version": 1, "target_repo": "github.com/acme/widget",
                       "credential_mode": "app", "app_binding_digest": session.binding.digest,
                       "delivery_id": "recovery-test", "issue": 42, "policy": source,
-                      "policy_values": {**tomllib.loads(POLICY.decode()), "_source": source}}
+                      "policy_values": {**tomllib.loads(policy.decode()), "_source": source}}
             plan_expected = {"repo": common["target_repo"], "issue": 42, "head": "codex/issue-42",
                              "head_sha": "c" * 40, "base": "main", "base_sha": client.base_sha,
                              "generation": 1, "manifest_digest": "d" * 64, "plan_revision": "c" * 40}
@@ -157,11 +180,21 @@ class AppRecoveryTest(unittest.TestCase):
                 self.assertIs(result["snapshot"]["repository"]["protected"], protected)
             safe_workflow = client.workflow_content
             client.workflow_content = safe_workflow.replace(b"runs-on: ubuntu-latest", b"runs-on: [self-hosted, linux]")
-            session.binding.ci["workflow_sha256"] = hashlib.sha256(client.workflow_content).hexdigest()
-            with self.assertRaisesRegex(delivery.DeliveryError, "shipped M1 fixture workflow"):
+            if require_github_actions:
+                session.binding.ci["workflow_sha256"] = hashlib.sha256(client.workflow_content).hexdigest()
+                mismatch = "shipped M1 fixture workflow"
+            else:
+                mismatch = "audited workflow content changed"
+            with self.assertRaisesRegex(delivery.DeliveryError, mismatch):
                 execute(preflight)
             client.workflow_content = safe_workflow
-            session.binding.ci["workflow_sha256"] = hashlib.sha256(safe_workflow).hexdigest()
+            if require_github_actions:
+                session.binding.ci["workflow_sha256"] = hashlib.sha256(safe_workflow).hexdigest()
+            else:
+                client.workflow_entries.append({"path": ".github/workflows/unknown.yml", "type": "file"})
+                with self.assertRaisesRegex(delivery.DeliveryError, "audited workflow inventory changed"):
+                    execute(preflight)
+                client.workflow_entries.pop()
             same_as_base = {**plan, "expected": {**plan_expected, "head": "main"},
                             "policy_values": {**plan["policy_values"], "branches": {
                                 **plan["policy_values"]["branches"], "plan_template": "main"}}}
@@ -198,7 +231,26 @@ class AppRecoveryTest(unittest.TestCase):
                 execute(finalize)
             self.assertTrue(client.prs[1]["draft"])
             client.prs[1]["body"] = original_body
-            self.assertEqual(execute(finalize)["status"], "pre_ready_ci_waiting")
+            if require_github_actions:
+                self.assertEqual(execute(finalize)["status"], "pre_ready_ci_waiting")
+            else:
+                for approval in ("plan_approval", "approval"):
+                    with self.assertRaisesRegex(delivery.DeliveryError, "review evidence must be an object"):
+                        execute({**finalize, approval: None})
+                    self.assertTrue(client.prs[1]["draft"])
+                with self.assertRaisesRegex(delivery.DeliveryError, "fixture deferral is incompatible"):
+                    execute({**finalize, "actions_deferred_head": impl_pr["head_sha"]})
+                self.assertTrue(client.prs[1]["draft"])
+                lose_response(finalize, "ready")
+                self.assertFalse(client.prs[1]["draft"])
+                with patch.object(publisher.local_verifier, "verify", return_value={
+                    "status": "blocked", "reason": "local_tests_failed", "head_sha": impl_pr["head_sha"],
+                }), patch.object(publisher.Publisher, "_gate_ci", side_effect=AssertionError("Actions was queried")):
+                    blocked = execute(finalize)
+                self.assertEqual(blocked["status"], "post_ready_ci_blocked")
+                self.assertEqual(blocked["ci"]["source"], "local")
+                self.assertEqual(client.issue_labels, set())
+
             client.runs = [{"id": 41, "workflow_id": 17, "event": "pull_request", "run_attempt": 1,
                             "head_sha": impl_pr["head_sha"], "head_branch": impl_pr["head"],
                             "repository": {"id": 77}, "head_repository": {"id": 77},
@@ -212,19 +264,29 @@ class AppRecoveryTest(unittest.TestCase):
                                    "base": {"sha": client.base_sha}}],
             })
             client.jobs = [{"id": 50, "name": "verify-fixture", "status": "completed", "conclusion": "success"}]
-            client.review_label_exists = False
-            with self.assertRaisesRegex(delivery.DeliveryError, "could not verify existing review label"):
-                execute(finalize)
-            self.assertTrue(client.prs[1]["draft"])
-            self.assertEqual(client.mutations, [("create", 1), ("edit", 1)])
-            client.review_label_exists = True
-            lose_response(finalize, "ready")
-            lose_response(finalize, "label")
-            final = execute(finalize)
+            if require_github_actions:
+                client.review_label_exists = False
+                with self.assertRaisesRegex(delivery.DeliveryError, "could not verify existing review label"):
+                    execute(finalize)
+                self.assertTrue(client.prs[1]["draft"])
+                self.assertEqual(client.mutations, [("create", 1), ("edit", 1)])
+                client.review_label_exists = True
+                lose_response(finalize, "ready")
+                lose_response(finalize, "label")
+                final = execute(finalize)
+                self.assertEqual(final["ci"]["run_id"], 41)
+            else:
+                success = {"status": "success", "reason": "local_tests_passed", "head_sha": impl_pr["head_sha"]}
+                with patch.object(publisher.local_verifier, "verify", return_value=success) as verify, patch.object(
+                        publisher.Publisher, "_gate_ci", side_effect=AssertionError("Actions was queried")):
+                    lose_response(finalize, "label")
+                    final = execute(finalize)
+                    verify.assert_called_once()
+                self.assertEqual(final["ci"]["source"], "local")
+                self.assertEqual(final["ci"]["head_sha"], impl_pr["head_sha"])
             self.assertEqual(final["status"], "review_ready")
             self.assertEqual(final["pr"]["node_id"], plan_pr["node_id"])
             self.assertFalse(final["pr"]["draft"])
-            self.assertEqual(final["ci"]["run_id"], 41)
             self.assertEqual(final["issue"]["labels"], ["status: review"])
             self.assertEqual(client.pushes, [(plan_expected["head"], plan_expected["head_sha"]),
                                             (impl_expected["head"], impl_expected["head_sha"])])

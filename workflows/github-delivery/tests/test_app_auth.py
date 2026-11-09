@@ -142,6 +142,55 @@ class AppAuthTest(unittest.TestCase):
         with self.assertRaisesRegex(Exception, "outside the App allowlist"):
             binding.verify_candidate_paths([".github/workflows/ci.yml"])
 
+    def test_loads_local_verifier_with_or_without_actions_ci(self):
+        verifier = {
+            "image": "registry.example.test/delivery-checks@sha256:" + "b" * 64,
+            "argv": ["pnpm", "check"],
+            "audited_workflows": {
+                ".github/workflows/ci.yml": "c" * 64,
+                ".github/workflows/pr-title.yaml": "d" * 64,
+            },
+        }
+        self.value["local_verifier"] = verifier
+        self._write_config()
+        binding = self.binding()
+        self.assertEqual(binding.local_verifier, verifier)
+        self.assertIsNotNone(binding.ci)
+
+        self.value["ci"] = None
+        self._write_config()
+        binding = self.binding()
+        self.assertIsNone(binding.ci)
+        self.assertEqual(binding.local_verifier, verifier)
+
+    def test_rejects_missing_or_invalid_local_verifier(self):
+        self.value["ci"] = None
+        self._write_config()
+        with self.assertRaisesRegex(Exception, "requires CI or a local verifier"):
+            self.binding()
+
+        valid = {
+            "image": "registry.example.test/checks@sha256:" + "b" * 64,
+            "argv": ["pnpm", "check"],
+            "audited_workflows": {},
+        }
+        cases = (
+            {**valid, "extra": True},
+            {**valid, "image": "registry.example.test/checks:latest"},
+            {**valid, "image": "Registry.example.test/checks@sha256:" + "b" * 64},
+            {**valid, "argv": []},
+            {**valid, "argv": ["pnpm\ncheck"]},
+            {**valid, "argv": ["pnpm\tcheck"]},
+            {**valid, "audited_workflows": {"ci.yml": "c" * 64}},
+            {**valid, "audited_workflows": {".github/workflows/ci.yml": "C" * 64}},
+        )
+        for value in cases:
+            with self.subTest(value=value):
+                self.value["local_verifier"] = value
+                self._write_config()
+                with self.assertRaisesRegex(Exception, "local verifier"):
+                    self.binding()
+
     def test_rejects_app_identity_mismatches_before_mint(self):
         binding = self.binding()
         for field, value in (("id", 999), ("client_id", "wrong"), ("slug", "wrong")):
@@ -284,6 +333,8 @@ class AppAuthTest(unittest.TestCase):
         sha = "1" * 40
         allowed = (
             ("GET", f"{repo}/contents/.github/delivery.toml?ref={sha}", None),
+            ("GET", f"{repo}/contents/.github/workflows?ref={sha}", None),
+            ("GET", f"{repo}/contents/.github/workflows/ci.yml?ref={sha}", None),
             ("GET", f"{repo}/actions/workflows?per_page=100", None),
             ("GET", f"{repo}/actions/workflows/66/runs?event=pull_request&per_page=100", None),
             ("PATCH", f"{repo}/pulls/1", {"title": "x", "body": "y", "base": "main"}),
@@ -297,6 +348,11 @@ class AppAuthTest(unittest.TestCase):
         self.assertEqual(api.graphql(query, {"id": "PR_node"}, token="secret"), {})
         with self.assertRaisesRegex(Exception, "not allowlisted"):
             api.request("POST", f"{repo}/dispatches", token="secret", payload={})
+        with self.assertRaisesRegex(Exception, "not allowlisted"):
+            api.request("GET", f"{repo}/contents/.github/workflows/subdir/ci.yml?ref={sha}",
+                        token="secret")
+        with self.assertRaisesRegex(Exception, "not allowlisted"):
+            api.request("GET", f"{repo}/contents/.github/workflows?ref=main", token="secret")
         with self.assertRaisesRegex(Exception, "not allowlisted"):
             api.graphql("mutation{deleteRepository(input:{}){clientMutationId}}", {}, token="secret")
 
