@@ -25,6 +25,10 @@ APP_SLUG = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
 FULL_NAME = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 CLIENT_ID = re.compile(r"^[A-Za-z0-9_.-]+$")
 WORKFLOW_PATH = re.compile(r"^\.github/workflows/[A-Za-z0-9_.-]+\.ya?ml$")
+CONTAINER_IMAGE = re.compile(
+    r"^(?:[a-z0-9]+(?:[._-][a-z0-9]+)*(?::[0-9]+)?/)*"
+    r"[a-z0-9]+(?:[._-][a-z0-9]+)*@sha256:[0-9a-f]{64}$"
+)
 ALLOWED_PERMISSIONS = {
     "actions": {"read"},
     "checks": {"read"},
@@ -77,7 +81,8 @@ class AppBinding:
     private_key_path: Path
     state_dir: Path
     allowed_path_prefixes: tuple[str, ...]
-    ci: dict[str, Any]
+    ci: dict[str, Any] | None
+    local_verifier: dict[str, Any] | None = None
 
     @classmethod
     def load(cls, path: Path, *, expected_digest: str | None = None) -> "AppBinding":
@@ -99,15 +104,18 @@ class AppBinding:
             raise delivery.DeliveryError("App binding is not valid JSON") from exc
         delivery.require(isinstance(value, dict) and value.get("schema_version") == 1,
                          "unsupported App binding schema")
-        delivery.require(set(value) == {
+        required_keys = {
             "schema_version", "host", "app", "installation", "repository",
             "permissions", "private_key_path", "state_dir", "allowed_path_prefixes", "ci",
-        }, "App binding contains unexpected fields")
+        }
+        delivery.require(set(value) in (required_keys, required_keys | {"local_verifier"}),
+                         "App binding contains unexpected fields")
         app = value.get("app")
         installation = value.get("installation")
         repository = value.get("repository")
         permissions = value.get("permissions")
         ci = value.get("ci")
+        local_verifier = value.get("local_verifier")
         delivery.require(isinstance(app, dict) and set(app) == {
             "id", "client_id", "slug", "bot_user_id",
         }, "App binding app identity is invalid")
@@ -158,21 +166,47 @@ class AppBinding:
             normalized_prefixes.append(prefix)
         delivery.require(len(normalized_prefixes) == len(set(normalized_prefixes)),
                          "App allowed path prefixes must be unique")
-        delivery.require(isinstance(ci, dict) and set(ci) == {
-            "workflow_id", "workflow_path", "workflow_sha256", "event", "required_job",
-        }, "App CI binding is invalid")
-        _positive_int(ci.get("workflow_id"), "CI workflow ID")
-        delivery.require(isinstance(ci.get("workflow_path"), str)
-                         and WORKFLOW_PATH.fullmatch(ci["workflow_path"]),
-                         "App CI workflow path is invalid")
-        delivery.require(ci.get("event") == "pull_request",
-                         "App CI event must be pull_request")
-        delivery.require(isinstance(ci.get("workflow_sha256"), str)
-                         and re.fullmatch(r"[0-9a-f]{64}", ci["workflow_sha256"]),
-                         "App CI workflow digest is invalid")
-        delivery.require(isinstance(ci.get("required_job"), str)
-                         and ci["required_job"].strip() == ci["required_job"]
-                         and ci["required_job"], "App CI required job is invalid")
+        if ci is not None:
+            delivery.require(isinstance(ci, dict) and set(ci) == {
+                "workflow_id", "workflow_path", "workflow_sha256", "event", "required_job",
+            }, "App CI binding is invalid")
+            _positive_int(ci.get("workflow_id"), "CI workflow ID")
+            delivery.require(isinstance(ci.get("workflow_path"), str)
+                             and WORKFLOW_PATH.fullmatch(ci["workflow_path"]),
+                             "App CI workflow path is invalid")
+            delivery.require(ci.get("event") == "pull_request",
+                             "App CI event must be pull_request")
+            delivery.require(isinstance(ci.get("workflow_sha256"), str)
+                             and re.fullmatch(r"[0-9a-f]{64}", ci["workflow_sha256"]),
+                             "App CI workflow digest is invalid")
+            delivery.require(isinstance(ci.get("required_job"), str)
+                             and ci["required_job"].strip() == ci["required_job"]
+                             and ci["required_job"], "App CI required job is invalid")
+        if local_verifier is not None:
+            delivery.require(isinstance(local_verifier, dict) and set(local_verifier) == {
+                "image", "argv", "audited_workflows",
+            }, "App local verifier binding is invalid")
+            image = local_verifier.get("image")
+            argv = local_verifier.get("argv")
+            audited = local_verifier.get("audited_workflows")
+            delivery.require(isinstance(image, str) and CONTAINER_IMAGE.fullmatch(image),
+                             "App local verifier image must be pinned by digest")
+            delivery.require(isinstance(argv, list) and 0 < len(argv) <= 64
+                             and all(isinstance(argument, str) and argument
+                                     and len(argument) <= 4096
+                                     and all(character >= " " and character != "\x7f"
+                                             for character in argument)
+                                     for argument in argv)
+                             and sum(len(argument) for argument in argv) <= 16384,
+                             "App local verifier argv is invalid")
+            delivery.require(isinstance(audited, dict)
+                             and all(isinstance(path, str) and WORKFLOW_PATH.fullmatch(path)
+                                     and isinstance(digest, str)
+                                     and re.fullmatch(r"[0-9a-f]{64}", digest)
+                                     for path, digest in audited.items()),
+                             "App local verifier audited workflows are invalid")
+        delivery.require(ci is not None or local_verifier is not None,
+                         "App binding requires CI or a local verifier")
         key_value = value.get("private_key_path")
         delivery.require(isinstance(key_value, str) and Path(key_value).is_absolute(),
                          "App private key path must be absolute")
@@ -201,7 +235,13 @@ class AppBinding:
             private_key_path=key_path,
             state_dir=state_dir,
             allowed_path_prefixes=tuple(sorted(normalized_prefixes)),
-            ci=dict(ci),
+            ci=dict(ci) if ci is not None else None,
+            local_verifier=(
+                {"image": local_verifier["image"],
+                 "argv": list(local_verifier["argv"]),
+                 "audited_workflows": dict(sorted(local_verifier["audited_workflows"].items()))}
+                if local_verifier is not None else None
+            ),
         )
 
     @property
@@ -334,7 +374,7 @@ class GitHubAppApi:
         )
         if not query and any(re.fullmatch(pattern, path) for pattern in no_query):
             return True
-        if re.fullmatch(rf"{repo}/contents/(?:\.github/delivery\.toml|"
+        if re.fullmatch(rf"{repo}/contents/(?:\.github/delivery\.toml|\.github/workflows|"
                         r"\.github/workflows/[A-Za-z0-9_.-]+\.ya?ml)", path):
             return set(query) == {"ref"} and bool(re.fullmatch(r"[0-9a-f]{40}", query["ref"][0]))
         if re.fullmatch(rf"{repo}/pulls", path):

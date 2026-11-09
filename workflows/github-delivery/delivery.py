@@ -161,6 +161,8 @@ def load_policy(path: Path, *, expected_digest: str, source_ref: str,
     eligibility = policy.get("eligibility", {})
     approvals = policy.get("approvals", {})
     require(isinstance(delivery, dict) and isinstance(branches, dict), "policy tables missing")
+    require(type(delivery.get("require_github_actions", True)) is bool,
+            "require_github_actions must be a boolean")
     require(isinstance(eligibility, dict) and isinstance(approvals, dict), "policy tables missing")
     for key in ("final_target", "default_parent", "plan_template", "implementation_template"):
         table = delivery if key == "final_target" else branches
@@ -221,7 +223,7 @@ def adapter_hashes() -> dict[str, str]:
     root = Path(__file__).resolve().parent
     names = ("delivery.py", "adapter.py", "publisher_adapter.py", "publisher.py",
              "trusted_git.py", "workflow.yaml", "app_auth.py", "agent_isolation.py",
-             "fixtures/delivery-fixture.yml")
+             "fixtures/delivery-fixture.yml", "local_verifier.py")
     return {name: digest_bytes((root / name).read_bytes()) for name in names}
 
 
@@ -710,6 +712,9 @@ def app_view(coordinator: Coordinator, state: dict[str, Any]) -> dict[str, Any]:
                                              "runner_status", "runner_run_id", "policy")}
     value["identity"] = state["app"].get("identity")
     value["receipts"] = state["receipts"]
+    value["require_github_actions"] = state["policy_values"]["delivery"].get(
+        "require_github_actions", True,
+    )
     active = read_json(coordinator._repo_dir(state["repo"]) / "active.json")
     value["claim_status"] = active["status"] if active.get("delivery_id") == state["delivery_id"] else "other_delivery"
     progress = state.get("publication", {})
@@ -809,6 +814,8 @@ def resume_app(coordinator: Coordinator, args) -> dict[str, Any]:
             app_claim(coordinator, state)
             defer_actions = getattr(args, "defer_actions_verification", False)
             if defer_actions:
+                require(state["policy_values"]["delivery"].get("require_github_actions", True),
+                        "fixture deferral is incompatible with the repository's Actions policy")
                 require(state["status"] == "implementation_review" and state["runner_status"] == "paused"
                         and not getattr(args, "result", None),
                         "Actions deferral requires a paused implementation review without a correction")
@@ -868,6 +875,8 @@ def main(argv: list[str] | None = None) -> int:
                 print(json.dumps(app_view(coordinator, value), sort_keys=True))
                 return 0
             require(args.publisher_launcher is not None, "user-token mode requires a publisher launcher")
+            require(policy["delivery"].get("require_github_actions", True),
+                    "local verification requires GitHub App mode")
             value = coordinator.start(repo=args.repo, issue=args.issue, policy=policy,
                 skills_root=args.skills_root, delivery_id=args.delivery_id,
                 agent=agent,

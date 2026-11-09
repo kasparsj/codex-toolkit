@@ -17,6 +17,7 @@ from typing import Any
 from urllib.parse import quote, urlencode
 
 import delivery
+import local_verifier
 from app_auth import AppAuthenticator, AppBinding
 from trusted_git import TrustedGit
 
@@ -294,47 +295,10 @@ class Publisher:
             "GET", self.repo, f"/repos/{{owner}}/{{repo}}/labels/{quote(label, safe='')}",
         )
         delivery.require(existing_label.get("name") == label, "App policy review label differs from GitHub")
-        workflow = self.client.api(
-            "GET", self.repo,
-            f"/repos/{{owner}}/{{repo}}/actions/workflows/{binding.ci['workflow_id']}",
-        )
-        delivery.require(
-            workflow.get("id") == binding.ci["workflow_id"]
-            and workflow.get("path") == binding.ci["workflow_path"]
-            and workflow.get("state") == "active",
-            "trusted CI workflow differs from the App binding",
-        )
-        workflows = self.client.paginated(
-            self.repo, "/repos/{owner}/{repo}/actions/workflows?per_page=100",
-        )
-        active_workflows = [item for item in workflows if item.get("state") == "active"]
-        delivery.require(
-            len(active_workflows) == 1
-            and active_workflows[0].get("id") == binding.ci["workflow_id"],
-            "disposable repository must have exactly one active trusted workflow",
-        )
-        workflow_content = self.client.api(
-            "GET", self.repo,
-            f"/repos/{{owner}}/{{repo}}/contents/{binding.ci['workflow_path']}?"
-            f"{urlencode({'ref': packet['policy']['sha']})}",
-        )
-        delivery.require(workflow_content.get("encoding") == "base64",
-                         "trusted CI workflow encoding is unsupported")
-        try:
-            workflow_bytes = base64.b64decode(
-                "".join(workflow_content["content"].split()), validate=True,
-            )
-        except (KeyError, ValueError) as exc:
-            raise delivery.DeliveryError("trusted CI workflow content is invalid") from exc
-        expected_workflow_digest = binding.ci.get("workflow_sha256")
-        delivery.require(
-            isinstance(expected_workflow_digest, str)
-            and hashlib.sha256(workflow_bytes).hexdigest() == expected_workflow_digest,
-            "trusted CI workflow digest differs from the App binding",
-        )
-        fixture = Path(__file__).resolve().parent / "fixtures" / "delivery-fixture.yml"
-        delivery.require(workflow_bytes == fixture.read_bytes() and binding.ci["required_job"] == "verify-fixture",
-                         "trusted CI must match the shipped M1 fixture workflow")
+        if policy["delivery"].get("require_github_actions", True):
+            self._verify_fixture_workflow(binding.ci, packet["policy"]["sha"])
+        else:
+            self._verify_audited_workflows(self._local_profile(), packet["policy"]["sha"])
         reviewer_ids = sorted({
             reviewer_id
             for stage in ("plan", "implementation")
@@ -398,6 +362,83 @@ class Publisher:
                 "fetched_at": delivery.utc_now(),
             },
         }
+
+    def _local_profile(self) -> dict[str, Any]:
+        profile = getattr(self.app_session.binding, "local_verifier", None)
+        delivery.require(isinstance(profile, dict), "protected App binding is missing a local verifier")
+        return profile
+
+    def _workflow_bytes(self, path: str, sha: str) -> bytes:
+        workflow_content = self.client.api(
+            "GET", self.repo,
+            f"/repos/{{owner}}/{{repo}}/contents/{path}?"
+            f"{urlencode({'ref': sha})}",
+        )
+        delivery.require(workflow_content.get("encoding") == "base64",
+                         "trusted CI workflow encoding is unsupported")
+        try:
+            return base64.b64decode(
+                "".join(workflow_content["content"].split()), validate=True,
+            )
+        except (KeyError, ValueError) as exc:
+            raise delivery.DeliveryError("trusted CI workflow content is invalid") from exc
+
+    def _verify_fixture_workflow(self, ci: dict[str, Any] | None, sha: str) -> None:
+        delivery.require(isinstance(ci, dict), "protected App binding is missing Actions CI")
+        workflow = self.client.api(
+            "GET", self.repo,
+            f"/repos/{{owner}}/{{repo}}/actions/workflows/{ci['workflow_id']}",
+        )
+        delivery.require(
+            workflow.get("id") == ci["workflow_id"]
+            and workflow.get("path") == ci["workflow_path"]
+            and workflow.get("state") == "active",
+            "trusted CI workflow differs from the App binding",
+        )
+        workflows = self.client.paginated(
+            self.repo, "/repos/{owner}/{repo}/actions/workflows?per_page=100",
+        )
+        active_workflows = [item for item in workflows if item.get("state") == "active"]
+        delivery.require(
+            len(active_workflows) == 1
+            and active_workflows[0].get("id") == ci["workflow_id"],
+            "disposable repository must have exactly one active trusted workflow",
+        )
+        workflow_bytes = self._workflow_bytes(ci["workflow_path"], sha)
+        expected_workflow_digest = ci.get("workflow_sha256")
+        delivery.require(
+            isinstance(expected_workflow_digest, str)
+            and hashlib.sha256(workflow_bytes).hexdigest() == expected_workflow_digest,
+            "trusted CI workflow digest differs from the App binding",
+        )
+        fixture = Path(__file__).resolve().parent / "fixtures" / "delivery-fixture.yml"
+        delivery.require(workflow_bytes == fixture.read_bytes() and ci["required_job"] == "verify-fixture",
+                         "trusted CI must match the shipped M1 fixture workflow")
+
+    def _verify_audited_workflows(self, profile: dict[str, Any], sha: str) -> None:
+        try:
+            entries = self.client.api(
+                "GET", self.repo,
+                f"/repos/{{owner}}/{{repo}}/contents/.github/workflows?{urlencode({'ref': sha})}",
+            )
+        except delivery.DeliveryError as exc:
+            if getattr(exc.__cause__, "code", None) != 404:
+                raise
+            entries = []
+        delivery.require(isinstance(entries, list) and len(entries) < 1000,
+                         "audited workflow inventory is unreadable or truncated")
+        paths = []
+        for entry in entries:
+            path = entry.get("path")
+            delivery.require(isinstance(path, str), "audited workflow path is invalid")
+            if path.lower().endswith((".yml", ".yaml")):
+                delivery.require(entry.get("type") == "file", "audited workflow must be a regular file")
+                paths.append(path)
+        expected = profile["audited_workflows"]
+        delivery.require(sorted(paths) == sorted(expected), "audited workflow inventory changed")
+        for path, digest in expected.items():
+            delivery.require(delivery.digest_bytes(self._workflow_bytes(path, sha)) == digest,
+                             f"audited workflow content changed: {path}")
 
     def _base_tip(self, expected: dict[str, Any]) -> str:
         branch = expected["base"]
@@ -1270,12 +1311,41 @@ class Publisher:
         }
 
     def _finalization_ci(self, packet: dict[str, Any], pr: dict[str, Any]) -> dict[str, Any]:
+        if packet.get("credential_mode") == "app" and not packet["policy_values"]["delivery"].get(
+                "require_github_actions", True):
+            return self._local_verification(packet, pr)
         if "actions_deferred_head" not in packet:
             return self._gate_ci(pr)
         delivery.require(packet.get("credential_mode") == "app"
                          and packet["actions_deferred_head"] == pr["head_sha"],
                          "Actions deferral is for a different implementation revision")
         return {"status": "deferred", "reason": "operator_deferred", "head_sha": pr["head_sha"]}
+
+    def _local_verification(self, packet: dict[str, Any], pr: dict[str, Any]) -> dict[str, Any]:
+        profile = self._local_profile()
+        scope = {"repo": self.repo, "delivery_id": packet["delivery_id"], "pr_number": pr["number"],
+                 "head_sha": pr["head_sha"], "base_sha": pr["base_sha"],
+                 "policy_digest": packet["policy"]["digest"],
+                 "binding_digest": packet["app_binding_digest"]}
+        key = delivery.digest_bytes(delivery.canonical_json(scope))
+        receipt = self.root / "local-verification" / f"{key}.json"
+        if receipt.exists():
+            saved = delivery.read_json(receipt)
+            result = saved.get("result", {})
+            delivery.require(saved.get("scope") == scope and result.get("status") == "success"
+                             and result.get("head_sha") == pr["head_sha"],
+                             "local verification receipt is invalid")
+        else:
+            result = local_verifier.verify(root=self.root, git_factory=self.git_factory,
+                                           canonical_url=self.canonical_url, pr=pr,
+                                           profile={"image": profile["image"], "argv": profile["argv"]})
+            delivery.require(result.get("head_sha") == pr["head_sha"]
+                             and result.get("status") in {"success", "blocked", "unknown"},
+                             "local verification returned invalid evidence")
+            if result["status"] == "success":
+                result["verified_at"] = delivery.utc_now()
+                delivery.atomic_json(receipt, {"scope": scope, "result": result})
+        return {**result, "source": "local", "head_sha": pr["head_sha"], "base_sha": pr["base_sha"]}
 
     def _existing_review_label(self, packet: dict[str, Any]) -> str:
         label = packet.get("existing_review_label")
@@ -1292,6 +1362,12 @@ class Publisher:
         return label
 
     def _finalize(self, packet: dict[str, Any]) -> dict[str, Any]:
+        require_actions = packet["policy_values"]["delivery"].get("require_github_actions", True)
+        delivery.require(require_actions or "actions_deferred_head" not in packet,
+                         "fixture deferral is incompatible with the repository's Actions policy")
+        app = packet.get("credential_mode") == "app"
+        if app and not require_actions:
+            self._local_profile()
         expected = packet["pr"]
         current = self._get_pr(expected["number"])
         for field in ("repo", "head", "head_sha", "base", "base_sha"):
@@ -1309,11 +1385,12 @@ class Publisher:
             return self._finalize_issue(packet, current)
         self._approval(packet, "plan_approval")
         self._approval(packet)
-        ci = self._finalization_ci(packet, current)
-        if ci["status"] not in {"success", "deferred"}:
-            suffix = "waiting" if ci["status"] == "waiting" else "blocked"
-            return {"schema_version": 1, "action": "finalize",
-                    "status": f"pre_ready_ci_{suffix}", "pr": current, "ci": ci}
+        if not app or require_actions is not False:
+            ci = self._finalization_ci(packet, current)
+            if ci["status"] not in {"success", "deferred"}:
+                suffix = "waiting" if ci["status"] == "waiting" else "blocked"
+                return {"schema_version": 1, "action": "finalize",
+                        "status": f"pre_ready_ci_{suffix}", "pr": current, "ci": ci}
         self._verify_policy(packet)
         self._base_tip({"base": current["base"], "base_sha": current["base_sha"]})
         self._approval(packet, "plan_approval")
@@ -1355,6 +1432,9 @@ class Publisher:
             suffix = "waiting" if ci["status"] == "waiting" else "blocked"
             return {"schema_version": 1, "action": "finalize",
                     "status": f"post_ready_ci_{suffix}", "pr": current, "ci": ci}
+        if ci.get("source") == "local":
+            self._verify_policy(packet)
+            self._base_tip({"base": current["base"], "base_sha": current["base_sha"]})
         issue = self._verify_issue(packet)
         digest = hashlib.sha256(
             delivery.canonical_json({"title": issue.get("title", ""), "body": issue.get("body", "")})

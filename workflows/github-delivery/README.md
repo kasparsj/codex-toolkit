@@ -38,6 +38,7 @@ version = 1
 final_target = "main"
 publisher_id = 9001
 policy_max_age_seconds = 3600
+require_github_actions = true
 
 [eligibility]
 required_labels = ["ready"]
@@ -369,3 +370,51 @@ For an explicitly authorized fixture trial, pass
 The runner records the deferral only after verifying the submitted approval
 and binds it to that exact head. The terminal record reports CI as deferred
 and still requires the ready PR and issue label to be read back.
+
+## Repository verification policy for GitHub App deliveries
+
+`delivery.require_github_actions` in the repository's trusted
+`.github/delivery.toml` defaults to `true`. The runner then requires trusted
+GitHub Actions success before marking ready and before tracking. The current
+Actions profile uses the M1 fixture workflow described above.
+
+Set `require_github_actions = false` under `[delivery]` to use automatic local
+verification. The App still requires both human approvals to mark the PR
+ready. It then runs the configured command against a fresh checkout of the
+exact published implementation head in an isolated, network-disabled
+container. The issue label and claim release require a passing result.
+A failed or unavailable check leaves the claim active. Resume to retry it.
+A successful result is recorded for the same PR, head, base, policy, and
+protected App binding so retries can finish tracking without rerunning tests.
+
+Configure the command and image in the operator's protected App binding. For
+example, replace the `ci` field with these fields for a repository without
+workflow files.
+
+```json
+{
+  "ci": null,
+  "local_verifier": {
+    "image": "registry.example/delivery-tests@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "argv": ["/usr/local/bin/verify-repo"],
+    "audited_workflows": {}
+  }
+}
+```
+
+Prepare the digest-pinned image locally with the runtime and offline
+dependency cache the command needs. For example, a verifier script in the
+image can install locked dependencies offline before running the repository
+suite. The command runs from a disposable copy of the checkout with no Git
+metadata. Keep the verification command and its test inputs outside the
+candidate's writable scope where practical. For repositories with workflow
+files, audit their triggers, credentials, and candidate inputs, then set `audited_workflows`
+to the complete mapping from each workflow path on the trusted default
+branch to its SHA-256 digest. Review the App's allowed paths against that
+audit. Preflight rejects missing, new, or changed workflow files.
+
+The policy is pinned at startup and applies to every delivery using that
+revision. The fixture-only `--defer-actions-verification` switch is
+incompatible with local verification. This policy selects the runner's
+evidence source. GitHub Actions scheduling and GitHub branch rules are
+managed separately.

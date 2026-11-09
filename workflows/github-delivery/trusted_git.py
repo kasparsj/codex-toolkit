@@ -135,6 +135,32 @@ class TrustedGit:
         delivery.require(self._rev_parse("refs/delivery/base^{commit}") == expected_sha,
                          "fetched base SHA mismatch")
 
+    def materialize_remote_revision(self, branch: str, expected_sha: str,
+                                    destination: Path) -> None:
+        """Fetch one remote branch tip and create a metadata-free exact checkout."""
+        self._require_open()
+        self._require_sha(expected_sha, "verification")
+        ref = self._branch_ref(branch)
+        delivery.require(self.remote_head(branch) == expected_sha,
+                         "remote verification branch changed")
+        self._git("fetch", "--no-tags", "--no-write-fetch-head", "origin",
+                  f"{ref}:refs/delivery/verification")
+        delivery.require(self._rev_parse("refs/delivery/verification^{commit}") == expected_sha,
+                         "fetched verification revision changed")
+        entries = self._git("ls-tree", "-r", "-z", expected_sha, text=False).stdout
+        for record in (item for item in entries.split(b"\0") if item):
+            metadata, _path = record.split(b"\t", 1)
+            mode, kind, _oid = metadata.decode("ascii").split(" ")
+            delivery.require(mode in {"100644", "100755"} and kind == "blob",
+                             "verification revision contains an unsupported Git object")
+        destination = destination.resolve()
+        delivery.require(destination.is_dir() and not destination.is_symlink()
+                         and not any(destination.iterdir()),
+                         "verification checkout must be an empty non-symlink directory")
+        self._git(f"--work-tree={destination}", "checkout", "--force", expected_sha, "--")
+        delivery.require(not any(path.is_symlink() for path in destination.rglob("*")),
+                         "verification checkout contains a symlink")
+
     def verify_introduced_paths(self, previous: str, *, allow_paths) -> None:
         """Inspect each new App commit, including changes reverted by its final tree."""
         self._require_open()

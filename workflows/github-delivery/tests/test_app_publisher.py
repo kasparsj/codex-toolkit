@@ -9,7 +9,7 @@ import unittest
 
 
 ROOT = Path(__file__).parents[1]
-for name in ("delivery", "app_auth", "trusted_git", "publisher"):
+for name in ("delivery", "app_auth", "trusted_git", "local_verifier", "publisher"):
     if name not in sys.modules:
         spec = importlib.util.spec_from_file_location(name, ROOT / f"{name}.py")
         module = importlib.util.module_from_spec(spec)

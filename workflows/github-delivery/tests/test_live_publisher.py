@@ -13,7 +13,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 
 ROOT = Path(__file__).parents[1]
-for name in ("delivery", "app_auth", "trusted_git", "publisher", "publisher_adapter"):
+for name in ("delivery", "app_auth", "trusted_git", "local_verifier", "publisher", "publisher_adapter"):
     spec = importlib.util.spec_from_file_location(name, ROOT / f"{name}.py")
     module = importlib.util.module_from_spec(spec)
     assert spec.loader

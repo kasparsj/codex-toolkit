@@ -262,6 +262,7 @@ def finalize(state: dict, launcher: Path, save=lambda _state: None) -> dict:
               "approval": approval_request(state, "implementation"),
               "plan_approval": approval_request(state, "plan")}
     deferred_head = state.get("actions_deferred_head") if app else None
+    local = app and not state["policy_values"]["delivery"].get("require_github_actions", True)
     if deferred_head is not None:
         delivery.require(deferred_head == publication["pr"]["head_sha"],
                          "Actions deferral is for a different implementation revision")
@@ -273,6 +274,12 @@ def finalize(state: dict, launcher: Path, save=lambda _state: None) -> dict:
             delivery.require(status in (delivery.APP_FINALIZING - {"publication_pending"}) | {"review_ready"},
                              "invalid trusted App finalization state")
             validate_pr(result.get("pr", {}), publication["pr"], draft=status.startswith("pre_ready"))
+            if local and status in {"tracking_pending", "review_ready"}:
+                ci = result.get("ci", {})
+                delivery.require(ci.get("status") == "success" and ci.get("source") == "local"
+                                 and ci.get("head_sha") == publication["pr"]["head_sha"]
+                                 and ci.get("base_sha") == publication["pr"]["base_sha"],
+                                 "successful exact-revision local verification readback required")
             if status != "review_ready":
                 return
             ci = result.get("ci", {})
