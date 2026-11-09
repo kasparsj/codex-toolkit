@@ -95,7 +95,7 @@ class Session:
         delivery.require(type(self.repository_id) is int and self.repository_id > 0,
                          "developer configuration requires a numeric repository ID")
         self.defaults = self.profile["policy"]
-        self.verifier = self.profile["local_verifier"]
+        self.verifier = self.profile.get("local_verifier")
         self.author_id = self.defaults["delivery"]["publisher_id"]
         self.token_file = self.profile.get("read_token_file")
         token = read_token(self.token_file)
@@ -207,9 +207,9 @@ def start(coordinator, args):
                      "developer start uses the pinned workflow and developer configuration")
     session = Session(args.developer_config, args.repo)
     root = coordinator.root
-    delivery.require(Path(session.profile["state_dir"]).resolve() == root and root.is_dir()
-                     and root.stat().st_uid == os.geteuid() and not root.stat().st_mode & 0o077,
-                     "developer mode requires its pre-provisioned owner-only state directory")
+    delivery.validate_protected_state_dir(
+        root, expected=Path(session.profile["state_dir"]), label="developer mode state",
+    )
     repo_dir = coordinator._repo_dir(args.repo)
     with delivery.mutex(repo_dir / "execution.lock") as execution_fd:
         active = repo_dir / "active.json"

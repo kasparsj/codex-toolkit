@@ -36,8 +36,8 @@ class AppCoordinatorTest(unittest.TestCase):
         }
         self.state = self.coordinator.start(
             repo=self.repo, issue=1, policy=self.policy, skills_root=self.skills,
-            publisher_launcher="/fixture/publisher",
-            agent={"launcher": "/fixture/agent", "worktree": "/fixture/checkout",
+            publisher_launcher=sys.executable,
+            agent={"launcher": sys.executable, "worktree": "/fixture/checkout",
                    "scratch": str(self.root / "scratch"), "skills_root": str(self.skills)},
             app={"digest": "a" * 64, "config": "/fixture/app.json", "publisher_root": "/fixture/publisher-root"},
         )
@@ -89,6 +89,9 @@ class AppCoordinatorTest(unittest.TestCase):
                          "pre_ready_ci_waiting")
 
     def test_cli_reports_imported_launcher_errors_as_blocked_json(self):
+        missing = self.root / "missing-publisher"
+        self.state["publisher_launcher"] = str(missing)
+        self.coordinator.save(self.state)
         completed = subprocess.run(
             [sys.executable, delivery.__file__, "resume", "--state-dir", str(self.coordinator.root),
              "--repo", self.repo, "--delivery-id", self.state["delivery_id"],
@@ -97,7 +100,7 @@ class AppCoordinatorTest(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 2)
         self.assertEqual(json.loads(completed.stdout), {
-            "status": "blocked", "error": "publisher launcher must be executable",
+            "status": "blocked", "error": f"restore the pinned publisher launcher at {missing}",
         })
         self.assertEqual(completed.stderr, "")
 

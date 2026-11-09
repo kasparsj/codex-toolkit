@@ -14,6 +14,65 @@ Omit `-g` for a project-only install. [Skills CLI reference](https://github.com/
 
 In a Codex chat, replace `owner/repo` with your repository and try `$next-issue owner/repo --rank`. This returns a shortlist and a recommended issue without writing to GitHub.
 
+## Install the GitHub delivery CLI
+
+Build and install the versioned wheel with Python 3.11 or later. `uv tool`
+keeps the command's interpreter independent of the `python3` selected by the
+target checkout or the shell.
+
+```sh
+uv build --python 3.11
+uv tool install --python 3.11 dist/codex_toolkit-0.1.0-py3-none-any.whl
+codex-toolkit delivery --help
+```
+
+The same package can be installed directly from a reviewed, full revision in a
+local clone:
+
+```sh
+uv tool install --python 3.11 \
+  "codex-toolkit @ git+file:///absolute/path/to/codex-toolkit@FULL_COMMIT_SHA"
+```
+
+Create the owner-controlled developer profile described in the [delivery
+guide](workflows/github-delivery/README.md#developer-mediated-delivery). Pass
+its absolute path explicitly, or store it at
+`~/.config/codex-toolkit/delivery/<owner>/<repo>.json`, with the owner and
+repository lowercased. Then run the installed workflow from the target
+checkout:
+
+```sh
+codex-toolkit delivery doctor --repo OWNER/REPO \
+  --agent-launcher /absolute/path/launcher \
+  --worktree /absolute/path/dedicated-checkout \
+  --agent-scratch /absolute/path/scratch \
+  --container-image IMAGE@sha256:DIGEST
+codex-toolkit delivery preview --repo OWNER/REPO
+codex-toolkit delivery start --repo OWNER/REPO --issue NUMBER \
+  --agent-launcher /absolute/path/launcher \
+  --worktree /absolute/path/dedicated-checkout \
+  --agent-scratch /absolute/path/scratch \
+  --container-image IMAGE@sha256:DIGEST
+codex-toolkit delivery status --repo OWNER/REPO
+codex-toolkit delivery resume --repo OWNER/REPO
+```
+
+Use `--developer-config /absolute/path/developer.json` after any subcommand to
+override profile discovery. `status`, `resume`, and `recover` accept an optional
+`--delivery-id`. Doctor reports omitted delivery inputs as full-delivery
+blockers while retaining its separate preview-readiness result. Preserve the
+installed version recorded by an active run. If a hard kill leaves the
+coordinator recorded as running, ordinary `resume` refuses the state. After
+proving the recorded process has exited, run:
+
+```sh
+codex-toolkit delivery recover --repo OWNER/REPO \
+  --developer-config /absolute/path/developer.json \
+  --delivery-id DELIVERY_ID
+```
+
+Then continue with `resume`.
+
 ## Interactive GitHub skills
 
 `next-issue` → `plan-pr` → `implement-plan` → `pr-closeout`

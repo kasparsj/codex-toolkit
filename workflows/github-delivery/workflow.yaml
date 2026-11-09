@@ -8,6 +8,7 @@ inputs:
   repo: {type: string, required: true}
   delivery_id: {type: string, required: true}
   adapter_dir: {type: string, required: true}
+  python_executable: {type: string, required: true}
   agent_launcher: {type: string, required: true}
   publisher_launcher: {type: string, required: true}
   worktree: {type: string, required: true}
@@ -33,10 +34,11 @@ steps:
       DELIVERY_REPO: "{{ inputs.repo }}"
       DELIVERY_ID: "{{ inputs.delivery_id }}"
       DELIVERY_ADAPTER_DIR: "{{ inputs.adapter_dir }}"
+      DELIVERY_PYTHON: "{{ inputs.python_executable }}"
     run: |
       set -euo pipefail
       test ! -t 0
-      python3 "$DELIVERY_ADAPTER_DIR/delivery.py" status --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID"
+      "$DELIVERY_PYTHON" "$DELIVERY_ADAPTER_DIR/delivery.py" status --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID"
   - id: optional-rank
     type: if
     condition: "{{ inputs.run_rank }}"
@@ -53,9 +55,10 @@ steps:
           DELIVERY_AGENT_SCRATCH: "{{ inputs.agent_scratch }}"
           DELIVERY_SKILLS_ROOT: "{{ inputs.skills_root }}"
           DELIVERY_ADAPTER_DIR: "{{ inputs.adapter_dir }}"
+          DELIVERY_PYTHON: "{{ inputs.python_executable }}"
         run: |
           set -euo pipefail
-          python3 "$DELIVERY_ADAPTER_DIR/adapter.py" run --kind rank --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID" --launcher "$DELIVERY_AGENT_LAUNCHER" --worktree "$DELIVERY_WORKTREE" --scratch "$DELIVERY_AGENT_SCRATCH/rank" --skills-root "$DELIVERY_SKILLS_ROOT"
+          "$DELIVERY_PYTHON" "$DELIVERY_ADAPTER_DIR/adapter.py" run --kind rank --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID" --launcher "$DELIVERY_AGENT_LAUNCHER" --worktree "$DELIVERY_WORKTREE" --scratch "$DELIVERY_AGENT_SCRATCH/rank" --skills-root "$DELIVERY_SKILLS_ROOT"
   - id: post-rank-status
     type: shell
     strict: true
@@ -65,9 +68,10 @@ steps:
       DELIVERY_REPO: "{{ inputs.repo }}"
       DELIVERY_ID: "{{ inputs.delivery_id }}"
       DELIVERY_ADAPTER_DIR: "{{ inputs.adapter_dir }}"
+      DELIVERY_PYTHON: "{{ inputs.python_executable }}"
     run: |
       set -euo pipefail
-      python3 "$DELIVERY_ADAPTER_DIR/delivery.py" status --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID"
+      "$DELIVERY_PYTHON" "$DELIVERY_ADAPTER_DIR/delivery.py" status --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID"
   - id: dispatch-plan-local
     type: if
     condition: "{{ inputs.run_plan and steps.post-rank-status.output.data.status != 'completed' }}"
@@ -78,7 +82,7 @@ steps:
         env: *agent_env
         run: |
           set -euo pipefail
-          python3 "$DELIVERY_ADAPTER_DIR/adapter.py" run --kind plan --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID" --launcher "$DELIVERY_AGENT_LAUNCHER" --worktree "$DELIVERY_WORKTREE" --scratch "$DELIVERY_AGENT_SCRATCH/plan" --skills-root "$DELIVERY_SKILLS_ROOT"
+          "$DELIVERY_PYTHON" "$DELIVERY_ADAPTER_DIR/adapter.py" run --kind plan --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID" --launcher "$DELIVERY_AGENT_LAUNCHER" --worktree "$DELIVERY_WORKTREE" --scratch "$DELIVERY_AGENT_SCRATCH/plan" --skills-root "$DELIVERY_SKILLS_ROOT"
   - id: dispatch-publish-plan
     type: if
     condition: "{{ inputs.publish_plan and steps.post-rank-status.output.data.status != 'completed' }}"
@@ -92,9 +96,10 @@ steps:
           DELIVERY_ID: "{{ inputs.delivery_id }}"
           DELIVERY_PUBLISHER_LAUNCHER: "{{ inputs.publisher_launcher }}"
           DELIVERY_ADAPTER_DIR: "{{ inputs.adapter_dir }}"
+          DELIVERY_PYTHON: "{{ inputs.python_executable }}"
         run: |
           set -euo pipefail
-          python3 "$DELIVERY_ADAPTER_DIR/publisher_adapter.py" publish-plan --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID" --launcher "$DELIVERY_PUBLISHER_LAUNCHER"
+          "$DELIVERY_PYTHON" "$DELIVERY_ADAPTER_DIR/publisher_adapter.py" publish-plan --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID" --launcher "$DELIVERY_PUBLISHER_LAUNCHER"
   - id: optional-plan-gate
     type: if
     condition: "{{ inputs.plan_gate and steps.post-rank-status.output.data.status != 'completed' }}"
@@ -117,9 +122,10 @@ steps:
           DELIVERY_REPO: "{{ inputs.repo }}"
           DELIVERY_ID: "{{ inputs.delivery_id }}"
           DELIVERY_ADAPTER_DIR: "{{ inputs.adapter_dir }}"
+          DELIVERY_PYTHON: "{{ inputs.python_executable }}"
         run: |
           set -euo pipefail
-          python3 "$DELIVERY_ADAPTER_DIR/delivery.py" advance --stage plan --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID"
+          "$DELIVERY_PYTHON" "$DELIVERY_ADAPTER_DIR/delivery.py" advance --stage plan --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID"
   - id: dispatch-implementation-local
     type: if
     condition: "{{ inputs.run_implementation and steps.post-rank-status.output.data.status != 'completed' }}"
@@ -130,7 +136,7 @@ steps:
         env: *agent_env
         run: |
           set -euo pipefail
-          python3 "$DELIVERY_ADAPTER_DIR/adapter.py" run --kind implement --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID" --launcher "$DELIVERY_AGENT_LAUNCHER" --worktree "$DELIVERY_WORKTREE" --scratch "$DELIVERY_AGENT_SCRATCH/implement" --skills-root "$DELIVERY_SKILLS_ROOT"
+          "$DELIVERY_PYTHON" "$DELIVERY_ADAPTER_DIR/adapter.py" run --kind implement --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID" --launcher "$DELIVERY_AGENT_LAUNCHER" --worktree "$DELIVERY_WORKTREE" --scratch "$DELIVERY_AGENT_SCRATCH/implement" --skills-root "$DELIVERY_SKILLS_ROOT"
   - id: dispatch-publish-implementation
     type: if
     condition: "{{ inputs.publish_implementation and steps.post-rank-status.output.data.status != 'completed' }}"
@@ -144,9 +150,10 @@ steps:
           DELIVERY_ID: "{{ inputs.delivery_id }}"
           DELIVERY_PUBLISHER_LAUNCHER: "{{ inputs.publisher_launcher }}"
           DELIVERY_ADAPTER_DIR: "{{ inputs.adapter_dir }}"
+          DELIVERY_PYTHON: "{{ inputs.python_executable }}"
         run: |
           set -euo pipefail
-          python3 "$DELIVERY_ADAPTER_DIR/publisher_adapter.py" publish-implementation --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID" --launcher "$DELIVERY_PUBLISHER_LAUNCHER"
+          "$DELIVERY_PYTHON" "$DELIVERY_ADAPTER_DIR/publisher_adapter.py" publish-implementation --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID" --launcher "$DELIVERY_PUBLISHER_LAUNCHER"
   - id: optional-implementation-gate
     type: if
     condition: "{{ inputs.implementation_gate and steps.post-rank-status.output.data.status != 'completed' }}"
@@ -169,9 +176,10 @@ steps:
           DELIVERY_REPO: "{{ inputs.repo }}"
           DELIVERY_ID: "{{ inputs.delivery_id }}"
           DELIVERY_ADAPTER_DIR: "{{ inputs.adapter_dir }}"
+          DELIVERY_PYTHON: "{{ inputs.python_executable }}"
         run: |
           set -euo pipefail
-          python3 "$DELIVERY_ADAPTER_DIR/delivery.py" advance --stage implementation --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID"
+          "$DELIVERY_PYTHON" "$DELIVERY_ADAPTER_DIR/delivery.py" advance --stage implementation --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID"
   - id: dispatch-finalize
     type: if
     condition: "{{ inputs.finalize and steps.post-rank-status.output.data.status != 'completed' }}"
@@ -185,9 +193,10 @@ steps:
           DELIVERY_ID: "{{ inputs.delivery_id }}"
           DELIVERY_PUBLISHER_LAUNCHER: "{{ inputs.publisher_launcher }}"
           DELIVERY_ADAPTER_DIR: "{{ inputs.adapter_dir }}"
+          DELIVERY_PYTHON: "{{ inputs.python_executable }}"
         run: |
           set -euo pipefail
-          python3 "$DELIVERY_ADAPTER_DIR/publisher_adapter.py" finalize --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID" --launcher "$DELIVERY_PUBLISHER_LAUNCHER"
+          "$DELIVERY_PYTHON" "$DELIVERY_ADAPTER_DIR/publisher_adapter.py" finalize --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID" --launcher "$DELIVERY_PUBLISHER_LAUNCHER"
   - id: dispatch-closeout
     type: if
     condition: "{{ inputs.agent_closeout and steps.post-rank-status.output.data.status != 'completed' }}"
@@ -198,7 +207,7 @@ steps:
         env: *agent_env
         run: |
           set -euo pipefail
-          python3 "$DELIVERY_ADAPTER_DIR/adapter.py" run --kind closeout --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID" --launcher "$DELIVERY_AGENT_LAUNCHER" --worktree "$DELIVERY_WORKTREE" --scratch "$DELIVERY_AGENT_SCRATCH/closeout" --skills-root "$DELIVERY_SKILLS_ROOT"
+          "$DELIVERY_PYTHON" "$DELIVERY_ADAPTER_DIR/adapter.py" run --kind closeout --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID" --launcher "$DELIVERY_AGENT_LAUNCHER" --worktree "$DELIVERY_WORKTREE" --scratch "$DELIVERY_AGENT_SCRATCH/closeout" --skills-root "$DELIVERY_SKILLS_ROOT"
   - id: final-status
     type: shell
     strict: true
@@ -207,6 +216,7 @@ steps:
       DELIVERY_REPO: "{{ inputs.repo }}"
       DELIVERY_ID: "{{ inputs.delivery_id }}"
       DELIVERY_ADAPTER_DIR: "{{ inputs.adapter_dir }}"
+      DELIVERY_PYTHON: "{{ inputs.python_executable }}"
     run: |
       set -euo pipefail
-      python3 "$DELIVERY_ADAPTER_DIR/delivery.py" status --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID"
+      "$DELIVERY_PYTHON" "$DELIVERY_ADAPTER_DIR/delivery.py" status --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID"

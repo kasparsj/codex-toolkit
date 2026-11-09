@@ -8,12 +8,14 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 
 import delivery
 
 
 def call_launcher(launcher: Path, packet: dict, *, app: dict | None = None) -> dict:
-    delivery.require(launcher.is_file() and os.access(launcher, os.X_OK),
+    bundled = launcher.resolve() == Path(__file__).resolve().with_name("publisher.py")
+    delivery.require(launcher.is_file() and (bundled or os.access(launcher, os.X_OK)),
                      "publisher launcher must be executable")
     if app is None:
         env = dict(os.environ)
@@ -27,7 +29,8 @@ def call_launcher(launcher: Path, packet: dict, *, app: dict | None = None) -> d
                        DELIVERY_OPERATOR_APP_DIGEST=app["operator_app_digest"],
                        DELIVERY_OPERATOR_POLICY=app["operator_policy"])
     env["DELIVERY_PUBLISHER_ISOLATED"] = "1"
-    completed = subprocess.run([str(launcher)], input=json.dumps(packet), text=True,
+    argv = [sys.executable, str(launcher)] if bundled else [str(launcher)]
+    completed = subprocess.run(argv, input=json.dumps(packet), text=True,
                                capture_output=True, env=env, check=False)
     if completed.returncode:
         try:

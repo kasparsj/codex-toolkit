@@ -1,0 +1,9 @@
+include LICENSE
+include README.md
+include scripts/verify_distribution.py
+recursive-include workflows/github-delivery *.py *.yaml *.yml
+recursive-include skills/next-issue *
+recursive-include skills/plan-pr *
+recursive-include skills/implement-plan *
+recursive-include skills/pr-closeout *
+prune workflows/github-delivery/tests

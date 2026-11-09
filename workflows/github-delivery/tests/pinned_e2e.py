@@ -4,6 +4,7 @@
 import datetime as dt
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -11,7 +12,10 @@ import tempfile
 
 
 ROOT = Path(__file__).resolve().parents[3]
-WORKFLOW = Path(__file__).resolve().parents[1]
+WORKFLOW = Path(os.environ.get(
+    "CODEX_TOOLKIT_DELIVERY_RUNTIME", Path(__file__).resolve().parents[1]
+)).resolve()
+SKILLS = Path(os.environ.get("CODEX_TOOLKIT_SKILLS_ROOT", ROOT / "skills")).resolve()
 
 
 def main() -> int:
@@ -40,7 +44,7 @@ minimum = 1
 reviewer_ids = [101]
 """)
         agent = root / "agent.py"
-        agent.write_text("""#!/usr/bin/env python3
+        agent.write_text(f"#!{sys.executable}\n" + """
 import json,sys
 p=json.load(sys.stdin); k=p['kind']; repo=p['repo']; did=p['delivery_id']; issue=p['issue']
 if k=='plan': r={'artifact_paths':['docs/plan.md'],'artifact_hashes':{'docs/plan.md':'a'*64},'plan_revision':'b'*40,'issue':issue,'baseline':{'repo':repo,'ref':'main','sha':'c'*40}}
@@ -49,7 +53,7 @@ else: r={'status':'WAITING','delivery_status':'READY','head_sha':'d'*40,'base_sh
 print(json.dumps({'schema_version':1,'kind':k,'delivery_id':did,'repo':repo,'result':r}))
 """); agent.chmod(0o700)
         publisher = root / "publisher.py"
-        publisher.write_text("""#!/usr/bin/env python3
+        publisher.write_text(f"#!{sys.executable}\n" + """
 import json,sys
 from pathlib import Path
 p=json.load(sys.stdin); a=p['action']
@@ -71,7 +75,7 @@ print(json.dumps(out))
             "--repo", "github.test/acme/widget", "--issue", "42", "--delivery-id", "pinned-e2e",
             "--policy", str(policy), "--policy-ref", "refs/remotes/origin/main", "--policy-sha", "a" * 40,
             "--policy-digest", digest, "--policy-fetched-at", dt.datetime.now(dt.timezone.utc).isoformat(),
-            "--skills-root", str(ROOT / "skills"), "--agent-launcher", str(agent),
+            "--skills-root", str(SKILLS), "--agent-launcher", str(agent),
             "--publisher-launcher", str(publisher), "--worktree", str(root),
             "--agent-scratch", str(root / "agent-scratch")]
         completed = subprocess.run(argv, text=True, capture_output=True)
@@ -82,7 +86,7 @@ print(json.dumps(out))
         assert result["runner"]["current_step_id"] == "publish-plan", result
         assert result["runner"]["run_id"], result
         resume = [sys.executable, str(WORKFLOW / "delivery.py"), "resume", "--state-dir", str(root / "state"),
-            "--repo", "github.test/acme/widget", "--delivery-id", "pinned-e2e", "--skills-root", str(ROOT / "skills")]
+            "--repo", "github.test/acme/widget", "--delivery-id", "pinned-e2e", "--skills-root", str(SKILLS)]
         completed = subprocess.run(resume, text=True, capture_output=True)
         if completed.returncode:
             sys.stderr.write(completed.stderr + completed.stdout); return completed.returncode
@@ -154,7 +158,7 @@ print(json.dumps(out))
 
         rank_log = root / "rank.log"
         ranker = root / "ranker.py"
-        ranker.write_text("""#!/usr/bin/env python3
+        ranker.write_text(f"#!{sys.executable}\n" + """
 import json,sys
 from pathlib import Path
 p=json.load(sys.stdin)
@@ -167,7 +171,7 @@ print(json.dumps({'schema_version':1,'kind':p['kind'],'delivery_id':p['delivery_
             "--delivery-id", "pinned-empty", "--policy", str(policy),
             "--policy-ref", "refs/remotes/origin/main", "--policy-sha", "a" * 40,
             "--policy-digest", digest, "--policy-fetched-at", dt.datetime.now(dt.timezone.utc).isoformat(),
-            "--skills-root", str(ROOT / "skills"), "--agent-launcher", str(ranker),
+            "--skills-root", str(SKILLS), "--agent-launcher", str(ranker),
             "--publisher-launcher", "/usr/bin/false", "--worktree", str(root),
             "--agent-scratch", str(root / "empty-agent-scratch"), "--no-dispatch"]
         invalid_ref = no_candidate.copy()
@@ -183,7 +187,7 @@ print(json.dumps({'schema_version':1,'kind':p['kind'],'delivery_id':p['delivery_
         assert not rank_log.exists()
         resume_empty = [sys.executable, str(WORKFLOW / "delivery.py"), "resume",
             "--state-dir", str(root / "empty-state"), "--repo", "github.test/acme/empty",
-            "--delivery-id", "pinned-empty", "--skills-root", str(ROOT / "skills")]
+            "--delivery-id", "pinned-empty", "--skills-root", str(SKILLS)]
         empty_active, = (root / "empty-state" / "repos").glob("*/active.json")
         own_claim = json.loads(empty_active.read_text())
         replacement = {**own_claim, "delivery_id": "replacement"}
