@@ -42,7 +42,7 @@ async function load({ force = false, revision = null, focus = false } = {}) {
   const sequence = ++state.sequence;
   const endpoint = force ? "/api/action-check" : "/api/item";
   const query = revision ? `?revision=${encodeURIComponent(revision)}` : "";
-  if (force) withdrawActions("Checking current revision…");
+  if (state.item?.review) withdrawActions("Checking current revision…");
   try {
     const response = await fetch(endpoint + query, { credentials: "same-origin", cache: "no-store" });
     if (sequence !== state.sequence) return null;
@@ -61,7 +61,8 @@ async function load({ force = false, revision = null, focus = false } = {}) {
     sessionStorage.removeItem("oauth-attempted");
     if (data.item.review) {
       scheduleRefresh(Math.min(refreshInterval, data.fresh_for_ms), data.revision);
-    } else if (["revision_changed", "github_unavailable", "evidence_unavailable"].includes(data.item.state)) {
+    } else if (data.item.github_unavailable ||
+               ["revision_changed", "evidence_unavailable", "eligibility_unavailable"].includes(data.item.state)) {
       scheduleRefresh(refreshInterval);
     }
     render(data.item, focus);
@@ -83,7 +84,7 @@ function render(item, focus = false) {
 
 function renderInbox(item) {
   const list = $("items"); list.replaceChildren();
-  const active = ["actionable", "verified_waiting", "rejected", "waiting", "evidence_unavailable", "revision_changed", "github_unavailable"].includes(item.state);
+  const active = item.delivery.status === "plan_review";
   if (!active) { $("feed-status").textContent = "You’re caught up"; return; }
   $("feed-status").textContent = "Needs action · 1";
   const link = el("a", { href: `/items/${encodeURIComponent(item.delivery_id)}`, class: "item-link",
@@ -118,6 +119,9 @@ function renderDetail(item) {
     if (artifact.verified && typeof artifact.content === "string") {
       const details = el("details"); details.append(el("summary", {}, `Verified ${artifact.path}`), el("pre", {}, artifact.content)); body.append(details);
     } else body.append(notice(`Pinned evidence ${artifact.path} could not be verified.`));
+  }
+  if (item.github_unavailable && item.state !== "github_unavailable") {
+    body.append(notice("GitHub is unavailable. The dashboard is showing the saved Delivery stage."));
   }
   renderState(body, item);
   if (item.receipt) renderReceipt(body, item);
@@ -184,7 +188,7 @@ function renderReceipt(body, item) {
 
 async function guarded(kind) {
   const data = await load({ force: true, revision: state.revision });
-  if (!data?.item?.review || data.revision !== state.revision) {
+  if (!data?.item?.review || data.revision !== state.revision || Date.now() >= state.expires) {
     $("revision-warning")?.focus(); announce("Review controls are no longer available"); return;
   }
   if (kind === "open") location.assign(data.item.review.url);

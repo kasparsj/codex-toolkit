@@ -5,8 +5,8 @@ This slice is a read-only dashboard for one configured private repository and on
 ## Boundaries
 
 - Run the dashboard on the existing `kaspars-ubuntu` loopback Compose network and publish it only through the existing Cloudflare Tunnel at `https://ct.kaspars.cc`.
-- Configure the GitHub OAuth App callback exactly as `https://ct.kaspars.cc/auth/github/callback`.
-- Give the OAuth App access only to the configured private repository. The server passes the configured numeric `repository_id` during exchange and proves the signed-in human and repository access on every data/action read.
+- Configure the GitHub App OAuth callback exactly as `https://ct.kaspars.cc/auth/github/callback`.
+- Install the GitHub App with access only to the configured private repository. The server passes the configured numeric `repository_id` during exchange and proves the signed-in human and repository access on every data/action read.
 - Put the OAuth client secret in an owner-only regular file (`0600`) and pass its path with `--client-secret-file`. Do not put it in Compose YAML, environment variables, logs, or the projection.
 - Keep the projection and invalidation directory owner controlled (`0700` directory, `0600` files). Mount only that directory into the dashboard container. Do not mount the Delivery state directory, App key, publisher root, or host worktree.
 

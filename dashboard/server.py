@@ -66,7 +66,10 @@ def utcnow() -> datetime:
 def parse_time(value: Any) -> datetime:
     if not isinstance(value, str):
         raise DashboardError("snapshot time invalid")
-    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise DashboardError("snapshot time invalid") from exc
     if parsed.tzinfo is None:
         raise DashboardError("snapshot time invalid")
     return parsed.astimezone(timezone.utc)
@@ -173,7 +176,9 @@ class GitHubClient:
             with self.opener.open(request, timeout=10) as response:
                 return json.loads(response.read())
         except HTTPError as exc:
-            if exc.code in (401, 403, 404):
+            if exc.code == 401:
+                raise SignInRequired("GitHub session expired") from exc
+            if exc.code in (403, 404):
                 raise NotAuthorized("GitHub access unavailable") from exc
             raise GitHubUnavailable("GitHub read unavailable") from exc
         except (URLError, OSError, json.JSONDecodeError) as exc:
@@ -321,16 +326,29 @@ class DashboardService:
         terminal_receipt = bool(receipt and (receipt.get("approved") or receipt.get("rejectors")))
         actionable = eligible and active_gate and evidence_ok and not invalid and not mismatch and not terminal_receipt
 
+        if force and actionable:
+            # Evidence and receipt reads can take time. Verify the mutable target
+            # again immediately before handing off the exact receipt instructions.
+            try:
+                live = self._live_pr(client.get(f"{prefix}/pulls/{saved_pr['number']}"))
+            except (NotAuthorized, GitHubUnavailable):
+                return self._unavailable(snapshot, viewer, opened_revision)
+            mismatch = self._mismatch(saved_pr, live)
+            if mismatch:
+                self.invalidations.add(opened_revision)
+                invalid = True
+                actionable = False
+
         # A concurrent transport update or correction cannot be revived by this response.
         current = self.load()
-        current_gate = current["delivery"]
-        current_active = bool(current["plan"].get("review") and current_gate.get("status") == "plan_review"
-                              and current_gate.get("runner_status") == "paused"
-                              and current_gate.get("current_step_id") == "plan-review"
-                              and current_gate.get("claim_status") == "active")
-        if (revision_key(current) != opened_revision or not current_active
+        current_revision = revision_key(current)
+        if (current_revision != opened_revision or current["delivery"] != gate
+                or current["plan"]["pr"] != saved_pr
+                or current["plan"].get("review") != review
                 or current["plan"].get("receipt") != snapshot["plan"].get("receipt")
-                or self.invalidations.contains(opened_revision)):
+                or current.get("implementation") != snapshot.get("implementation")):
+            return {"status": "stale", "message": "Review request changed", "revision": current_revision}
+        if self.invalidations.contains(opened_revision):
             actionable = False
             invalid = True
 
@@ -355,7 +373,7 @@ class DashboardService:
                 "viewer": {"id": viewer["id"], "login": viewer.get("login"), "eligible": eligible,
                            "eligibility_known": eligibility_known},
                 "state": (self._display_state(snapshot, actionable, invalid, mismatch, evidence_ok)
-                          if eligibility_known else "eligibility_unavailable"),
+                          if eligibility_known or not active_gate else "eligibility_unavailable"),
             },
         }
         if actionable:
@@ -380,38 +398,54 @@ class DashboardService:
                     "artifacts": [{"path": item["path"], "sha256": item["sha256"], "verified": False,
                                    "url": f"{repo_url}/blob/{pr['head_sha']}/{quote(item['path'], safe='/')}"}
                                   for item in plan["artifacts"]],
-                    "receipt": plan.get("receipt"), "implementation": self._implementation(snapshot, repo_url),
+                    "receipt": self._saved_receipt(snapshot), "implementation": self._implementation(snapshot, repo_url),
                     "viewer": {"id": viewer["id"], "login": viewer.get("login"), "eligible": False},
-                    "state": "github_unavailable",
+                    "github_unavailable": True,
+                    "state": ("github_unavailable" if snapshot["delivery"]["status"] == "plan_review"
+                              else self._display_state(snapshot, False, False, False, False)),
                 }}
 
     @staticmethod
     def _live_pr(value: Any) -> dict[str, Any]:
-        if not isinstance(value, dict):
-            raise GitHubUnavailable("pull request response invalid")
         try:
-            return {"number": value["number"], "node_id": value["node_id"], "head": value["head"]["ref"],
-                    "head_sha": value["head"]["sha"], "base": value["base"]["ref"],
-                    "base_sha": value["base"]["sha"], "draft": value["draft"],
-                    "state": value["state"].upper(), "author_id": value["user"]["id"],
-                    "author_type": value["user"].get("type"), "author_login": value["user"].get("login"),
-                    "head_repo_id": value["head"].get("repo", {}).get("id"),
-                    "base_repo_id": value["base"].get("repo", {}).get("id"),
-                    "performed_via_github_app": value.get("performed_via_github_app"),
-                    "body_digest": hashlib.sha256((value.get("body") or "").encode()).hexdigest()}
-        except (KeyError, TypeError, AttributeError) as exc:
+            head, base, author = value["head"], value["base"], value["user"]
+            body = value["body"]
+            provenance = value.get("performed_via_github_app")
+            pr = {
+                "number": value["number"], "node_id": value["node_id"],
+                "head": head["ref"], "head_sha": head["sha"], "head_repo_id": head["repo"]["id"],
+                "base": base["ref"], "base_sha": base["sha"], "base_repo_id": base["repo"]["id"],
+                "draft": value["draft"], "state": value["state"].upper(),
+                "author_id": author["id"], "author_type": author["type"], "author_login": author["login"],
+                "performed_via_github_app": provenance,
+                "body_digest": hashlib.sha256((body or "").encode()).hexdigest(),
+            }
+            if (any(type(pr[key]) is not int or pr[key] <= 0
+                    for key in ("number", "author_id", "head_repo_id", "base_repo_id"))
+                    or any(not isinstance(pr[key], str) or not pr[key]
+                           for key in ("node_id", "head", "base", "author_type", "author_login"))
+                    or not FULL_SHA.fullmatch(pr["head_sha"]) or not FULL_SHA.fullmatch(pr["base_sha"])
+                    or type(pr["draft"]) is not bool or pr["state"] not in ("OPEN", "CLOSED")
+                    or (body is not None and not isinstance(body, str))
+                    or (provenance is not None and
+                        (type(provenance["id"]) is not int or not isinstance(provenance["slug"], str)))):
+                raise ValueError("malformed PR")
+        except (KeyError, TypeError, AttributeError, ValueError) as exc:
             raise GitHubUnavailable("pull request response invalid") from exc
+        return pr
 
     @staticmethod
     def _mismatch(saved: dict[str, Any], live: dict[str, Any]) -> bool:
-        required = ("number", "node_id", "head", "head_sha", "base", "base_sha", "draft", "state", "author_id",
-                    "author_type", "author_login", "body_digest")
-        if not saved.get("body_digest") or any(saved.get(key) != live.get(key) for key in required):
+        required = ("number", "node_id", "head", "head_sha", "base", "base_sha", "draft", "state",
+                    "author_id", "author_type", "body_digest", "head_repo_id", "base_repo_id")
+        if (any(saved.get(key) != live[key] for key in required)
+                or str(saved.get("author_login", "")).lower() != live["author_login"].lower()):
             return True
-        for key in ("head_repo_id", "base_repo_id", "performed_via_github_app"):
-            if saved.get(key) is not None and saved.get(key) != live.get(key):
-                return True
-        return False
+        expected = saved.get("performed_via_github_app")
+        actual = live.get("performed_via_github_app")
+        if expected is None or actual is None:
+            return expected is not actual
+        return any(expected.get(key) != actual[key] for key in ("id", "slug"))
 
     def _artifacts(self, client: GitHubClient, snapshot: dict[str, Any]) -> tuple[list[dict[str, Any]], bool]:
         result = []
@@ -440,18 +474,47 @@ class DashboardService:
             result.append(entry)
         return result, okay
 
+    @staticmethod
+    def _saved_receipt(snapshot: dict[str, Any]) -> dict[str, Any] | None:
+        plan = snapshot["plan"]
+        saved = plan.get("receipt")
+        if saved is None:
+            return None
+        review = plan.get("review")
+        if (not isinstance(saved, dict) or not isinstance(review, dict)
+                or saved.get("commit_id") != plan["pr"]["head_sha"]
+                or saved.get("context_digest") != review.get("context_digest")
+                or type(saved.get("approved")) is not bool
+                or type(saved.get("minimum")) is not int
+                or saved["minimum"] < 1 or saved["minimum"] != review.get("minimum")):
+            raise DashboardError("saved receipt does not match the plan")
+
+        approvals, rejects = saved.get("approvers"), saved.get("rejectors")
+        eligible = review.get("reviewer_ids", [])
+        review_ids = saved.get("review_ids")
+        if (not isinstance(approvals, list) or not isinstance(rejects, list)
+                or any(type(user) is not int or user not in eligible
+                       or user == snapshot["policy"].get("publisher_id")
+                       for user in approvals + rejects)):
+            raise DashboardError("saved receipt reviewers invalid")
+        reviewers = approvals + rejects
+        if (len(set(reviewers)) != len(reviewers)
+                or saved["approved"] != (not rejects and len(approvals) >= saved["minimum"])
+                or not isinstance(review_ids, dict)
+                or set(review_ids) != {str(user) for user in reviewers}
+                or any(type(review_id) is not int or review_id <= 0 for review_id in review_ids.values())):
+            raise DashboardError("saved receipt verdict invalid")
+        parse_time(saved.get("checked_at"))
+        return saved
+
     def _receipt(self, client: GitHubClient, snapshot: dict[str, Any], review: Any) -> dict[str, Any] | None:
-        saved = snapshot["plan"].get("receipt")
-        if not isinstance(saved, dict):
+        saved = self._saved_receipt(snapshot)
+        if saved is None:
             return None
         result = dict(saved)
         result["enrichment"] = "unavailable"
-        review_ids = saved.get("review_ids")
-        if not isinstance(review_ids, dict) or not review:
-            return result
+        review_ids = saved["review_ids"]
         for author, review_id in review_ids.items():
-            if not str(author).isdigit() or not isinstance(review_id, int):
-                continue
             try:
                 value = client.get(f"/repos/{self.repo}/pulls/{snapshot['plan']['pr']['number']}/reviews/{review_id}")
             except (NotAuthorized, GitHubUnavailable):
@@ -459,13 +522,16 @@ class DashboardService:
             author_id = int(author)
             decision_body = (review.get("approve") if author_id in saved.get("approvers", []) else
                              review.get("reject") if author_id in saved.get("rejectors", []) else None)
-            if (decision_body and isinstance(value, dict) and value.get("id") == review_id
-                    and value.get("user", {}).get("id") == author_id
+            user = value.get("user") if isinstance(value, dict) else None
+            if (decision_body and isinstance(user, dict) and value.get("id") == review_id
+                    and user.get("id") == author_id and user.get("type") == "User"
+                    and value.get("performed_via_github_app") is None and value.get("dismissed") is not True
+                    and isinstance(value.get("submitted_at"), str)
                     and value.get("commit_id") == saved.get("commit_id")
                     and value.get("state") == "COMMENTED" and value.get("body") == decision_body
                     and saved.get("context_digest") == review.get("context_digest")):
                 result.update(enrichment="verified", url=value.get("html_url"),
-                              reviewer=value.get("user", {}).get("login"), submitted_at=value.get("submitted_at"))
+                              reviewer=user.get("login"), submitted_at=value["submitted_at"])
                 break
         return result
 
@@ -483,16 +549,22 @@ class DashboardService:
                        mismatch: bool, evidence_ok: bool) -> str:
         delivery = snapshot["delivery"]
         receipt = snapshot["plan"].get("receipt")
+        if delivery.get("runner_status") == "failed":
+            return "runner_failed"
         if delivery.get("status") == "implementation_review":
-            return "implementation_review"
+            implementation = snapshot.get("implementation") or {}
+            if (delivery.get("runner_status") == "paused"
+                    and delivery.get("current_step_id") == "implementation-review"
+                    and implementation.get("number") == snapshot["plan"]["pr"]["number"]
+                    and FULL_SHA.fullmatch(str(implementation.get("head_sha", "")))):
+                return "implementation_review"
+            return "post_plan"
         if delivery.get("status") == "implementation_required":
             return "implementation_next"
         if delivery.get("status") in ("publication_pending", "pre_ready_ci_waiting", "pre_ready_ci_blocked"):
             return "post_plan"
         if delivery.get("status") == "review_ready":
             return "delivery_ready"
-        if delivery.get("runner_status") == "failed":
-            return "runner_failed"
         if delivery.get("status") == "plan_review" and isinstance(receipt, dict) and receipt.get("approved"):
             return "verified_waiting"
         if isinstance(receipt, dict) and receipt.get("rejectors"):

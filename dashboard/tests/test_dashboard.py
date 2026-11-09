@@ -178,6 +178,28 @@ class DashboardServiceTest(unittest.TestCase):
         self.assertNotIn("review", result["item"])
         self.assertNotIn(APPROVE, json.dumps(result))
 
+    def test_malformed_live_revision_is_retryable_without_invalidation(self):
+        FakeGitHub.values[f"/repos/{REPO}/pulls/7"]["head"]["sha"] = "invalid"
+        result = self.service.present("token")
+        self.assertEqual(result["item"]["state"], "github_unavailable")
+        self.assertNotIn("review", result["item"])
+        self.assertFalse(self.invalid.exists())
+        FakeGitHub.values = github_values()
+        self.assertEqual(self.service.present("token")["item"]["state"], "actionable")
+
+    def test_action_rechecks_head_after_reading_pinned_artifact(self):
+        def move_head(path):
+            if "/contents/" in path:
+                FakeGitHub.values[f"/repos/{REPO}/pulls/7"]["head"]["sha"] = "d" * 40
+        FakeGitHub.callback = move_head
+        result = self.service.present("token", force=True)
+        self.assertEqual(result["item"]["state"], "revision_changed")
+        self.assertNotIn("review", result["item"])
+
+    def test_mutable_app_metadata_does_not_invalidate_pr(self):
+        FakeGitHub.values[f"/repos/{REPO}/pulls/7"]["performed_via_github_app"]["description"] = "New text"
+        self.assertEqual(self.service.present("token")["item"]["state"], "actionable")
+
     def test_digest_mismatch_withholds_controls(self):
         FakeGitHub.values = github_values(artifact=b"changed")
         result = self.service.present("token")
@@ -217,7 +239,8 @@ class DashboardServiceTest(unittest.TestCase):
                 self.write(changed)
         FakeGitHub.callback = mutate
         result = self.service.present("token", force=True)
-        self.assertNotIn("review", result["item"])
+        self.assertEqual(result["status"], "stale")
+        self.assertNotIn(APPROVE, json.dumps(result))
 
     def test_requested_old_revision_cannot_revive_after_new_request(self):
         old = server.revision_key(snapshot())
@@ -246,7 +269,7 @@ class DashboardServiceTest(unittest.TestCase):
         receipt = {"approved": True, "approvers": [101], "rejectors": [], "minimum": 1,
                    "review_ids": {"101": 44}, "commit_id": HEAD, "context_digest": "c" * 64,
                    "checked_at": "2026-11-09T12:00:00+00:00"}
-        review = {"id": 44, "user": {"id": 101, "login": "reviewer"}, "commit_id": HEAD,
+        review = {"id": 44, "user": {"id": 101, "login": "reviewer", "type": "User"}, "commit_id": HEAD,
                   "state": "COMMENTED", "body": APPROVE, "submitted_at": "2026-11-09T11:59:00Z",
                   "html_url": "https://github.com/owner/private/pull/7#pullrequestreview-44"}
         self.write(snapshot(receipt=receipt))
@@ -258,27 +281,64 @@ class DashboardServiceTest(unittest.TestCase):
 
     def test_wrong_review_context_sha_user_state_or_body_is_not_enriched(self):
         receipt = {"approved": True, "approvers": [101], "rejectors": [], "minimum": 1,
-                   "review_ids": {"101": 44}, "commit_id": HEAD, "context_digest": "c" * 64}
+                   "review_ids": {"101": 44}, "commit_id": HEAD, "context_digest": "c" * 64,
+                   "checked_at": "2026-11-09T12:00:00+00:00"}
         self.write(snapshot(receipt=receipt))
-        base_review = {"id": 44, "user": {"id": 101}, "commit_id": HEAD,
-                       "state": "COMMENTED", "body": APPROVE}
+        base_review = {"id": 44, "user": {"id": 101, "type": "User"}, "commit_id": HEAD,
+                       "state": "COMMENTED", "body": APPROVE, "submitted_at": "2026-11-09T11:59:00Z"}
         mutations = [{"commit_id": BASE}, {"user": {"id": 102}}, {"state": "DISMISSED"},
-                     {"body": REJECT}]
+                     {"body": REJECT}, {"dismissed": True}, {"performed_via_github_app": {"id": 1}}]
         for mutation in mutations:
             with self.subTest(mutation=mutation):
                 review = {**base_review, **mutation}
                 FakeGitHub.values = github_values(review=review)
                 self.assertEqual(self.service.present("token")["item"]["receipt"]["enrichment"], "unavailable")
 
+    def test_saved_receipt_must_match_revision_and_reviewer_policy(self):
+        receipt = {"approved": True, "approvers": [101], "rejectors": [], "minimum": 1,
+                   "review_ids": {"101": 44}, "commit_id": HEAD, "context_digest": "c" * 64,
+                   "checked_at": "2026-11-09T12:00:00+00:00"}
+        for mutation in ({"commit_id": BASE}, {"context_digest": "d" * 64}, {"minimum": 2},
+                         {"approvers": [900], "review_ids": {"900": 44}}, {"approved": False}):
+            with self.subTest(mutation=mutation):
+                self.write(snapshot(receipt={**receipt, **mutation}))
+                with self.assertRaises(server.DashboardError):
+                    self.service.present("token")
+
     def test_later_runner_stages_are_not_waiting_for_resume(self):
-        receipt = {"approved": True, "approvers": [101], "rejectors": [], "minimum": 1}
+        receipt = {"approved": True, "approvers": [101], "rejectors": [], "minimum": 1,
+                   "review_ids": {"101": 44}, "commit_id": HEAD, "context_digest": "c" * 64,
+                   "checked_at": "2026-11-09T12:00:00+00:00"}
         for status, expected in [("implementation_required", "implementation_next"),
-                                 ("implementation_review", "implementation_review"),
+                                 ("implementation_review", "post_plan"),
                                  ("review_ready", "delivery_ready")]:
             with self.subTest(status=status):
                 self.write(snapshot(status=status, runner="completed", step="done", claim="released",
                                     receipt=receipt))
                 self.assertEqual(self.service.present("token")["item"]["state"], expected)
+
+    def test_implementation_review_requires_published_paused_target(self):
+        value = snapshot(status="implementation_review", step="implementation-review")
+        self.write(value)
+        self.assertEqual(self.service.present("token")["item"]["state"], "post_plan")
+        value["implementation"] = {"number": 7, "head_sha": "e" * 40}
+        self.write(value)
+        self.assertEqual(self.service.present("token")["item"]["state"], "implementation_review")
+        value["delivery"]["runner_status"] = "failed"
+        self.write(value)
+        self.assertEqual(self.service.present("token")["item"]["state"], "runner_failed")
+
+    def test_live_read_outages_preserve_confirmed_stage(self):
+        value = snapshot(status="implementation_review", step="implementation-review")
+        value["implementation"] = {"number": 7, "head_sha": "e" * 40}
+        self.write(value)
+        FakeGitHub.values["/user"] = server.GitHubUnavailable("viewer timeout")
+        self.assertEqual(self.service.present("token")["item"]["state"], "implementation_review")
+        FakeGitHub.values[f"/repos/{REPO}/pulls/7"] = server.GitHubUnavailable("PR timeout")
+        item = self.service.present("token")["item"]
+        self.assertEqual(item["state"], "implementation_review")
+        self.assertTrue(item["github_unavailable"])
+        self.assertNotIn("review", item)
 
     def test_expired_or_overpermissive_snapshot_fails(self):
         self.write(snapshot(expires=-1))

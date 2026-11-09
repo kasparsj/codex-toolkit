@@ -71,7 +71,7 @@ def values(mode: str) -> tuple[dict, dict]:
             "path": "docs/plan.md", "encoding": "base64", "content": base64.b64encode(PLAN).decode()},
     }
     if receipt:
-        github[f"/repos/{REPO}/pulls/7/reviews/44"] = {"id": 44, "user": {"id": 101, "login": "fixture-reviewer"},
+        github[f"/repos/{REPO}/pulls/7/reviews/44"] = {"id": 44, "user": {"id": 101, "login": "fixture-reviewer", "type": "User"},
             "commit_id": HEAD, "state": "COMMENTED", "body": APPROVE, "submitted_at": now.isoformat(),
             "html_url": "https://github.com/fixture/private-repo/pull/7#pullrequestreview-44"}
     return snapshot, github
