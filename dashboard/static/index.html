@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Needs attention · Codex Toolkit</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <a class="skip" href="#detail">Skip to review detail</a>
+  <header><span class="brand">Codex Toolkit</span><span class="context">Private workspace</span></header>
+  <main>
+    <section class="inbox" aria-labelledby="inbox-title">
+      <div class="section-head">
+        <div><p class="eyebrow">Delivery</p><h1 id="inbox-title" tabindex="-1">Needs attention</h1></div>
+        <button id="refresh" type="button">Refresh status</button>
+      </div>
+      <p id="feed-status" class="muted">Checking the configured run…</p>
+      <ol id="items" class="items"></ol>
+    </section>
+    <article id="detail" class="detail" aria-labelledby="detail-title" tabindex="-1">
+      <a id="mobile-back" class="mobile-back" href="/">← Back to inbox</a>
+      <div id="detail-body"><p class="muted">Select the configured review.</p></div>
+    </article>
+  </main>
+  <div id="live" class="sr-only" aria-live="polite"></div>
+  <script src="/app.js" defer></script>
+</body>
+</html>
