@@ -28,6 +28,12 @@ def main():
         terminal.write("Safe explanation for the audit report\n")
         terminal.flush()
         reason = replies.readline().strip() or "Operator deferred or reviewed this phase."
+        continuation = None
+        sequence = packet["evidence"].get("packet", {}) if phase == "overlap" else {}
+        if disposition == "clear" and sequence.get("index", 0) < sequence.get("total", 0):
+            terminal.write("Carry decision-relevant details forward to the next packet\n")
+            terminal.flush()
+            continuation = replies.readline().strip()
     response = {
         "digest": packet["digest"],
         "disposition": disposition,
@@ -36,6 +42,8 @@ def main():
     }
     if related_candidate:
         response["related_candidate"] = related_candidate
+    if continuation:
+        response["continuation"] = continuation
     json.dump(response, sys.stdout)
 
 

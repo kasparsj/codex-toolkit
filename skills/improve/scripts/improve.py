@@ -138,11 +138,14 @@ def review(executable, phase, binding, key, candidate, evidence):
         "evidence": evidence,
     }
     packet["digest"] = digest(packet)
+    encoded = json.dumps(packet).encode("utf-8")
+    if phase == "overlap" and len(encoded) > 96 * 1024:
+        raise Invalid("overlap_packet_exceeds_review_bound")
     # The executable is trusted operator configuration. No repository cwd or token is inherited.
     with tempfile.TemporaryDirectory(prefix="improve-review-") as scratch, tempfile.TemporaryFile() as output:
         try:
             subprocess.run(
-                executable, input=json.dumps(packet).encode("utf-8"), stdout=output,
+                executable, input=encoded, stdout=output,
                 stderr=subprocess.DEVNULL, cwd=scratch, env={"PATH": os.defpath, "HOME": scratch},
                 timeout=60, check=True,
             )
@@ -150,8 +153,8 @@ def review(executable, phase, binding, key, candidate, evidence):
             response = parse(output.read(8193))
             require(output.tell() <= 8192)
             names = ["digest", "disposition", "related", "reason"]
-            if type(response) is dict and "related_candidate" in response:
-                names.append("related_candidate")
+            if type(response) is dict:
+                names.extend(name for name in ("related_candidate", "continuation") if name in response)
             fields(response, *names)
             require(response["digest"] == packet["digest"])
             allowed = ("clear", "defer", "covered", "duplicate", "fixed") if phase == "overlap" else ("clear", "defer")
@@ -164,6 +167,9 @@ def review(executable, phase, binding, key, candidate, evidence):
                 require(phase == "overlap" and response["disposition"] == "duplicate"
                         and not response["related"] and type(response["related_candidate"]) is str
                         and SAFE_ID.fullmatch(response["related_candidate"]))
+            if "continuation" in response:
+                require(phase == "overlap" and response["disposition"] == "clear")
+                text(response["continuation"], 1024)
             text(response["reason"], 512)
         except (OSError, ValueError, subprocess.SubprocessError) as error:
             raise Invalid("review_unavailable_or_invalid") from error
@@ -210,22 +216,107 @@ def render(binding, candidate, related):
     return {"title": c["title"], "body": body}
 
 
-def safe_evidence(evidence):
-    """Send only bounded, screened GitHub evidence to the credential-free reviewer."""
-    def redact(value):
-        if isinstance(value, str):
-            return "\n".join("[restricted line]" if SENSITIVE.search(line) else line
-                             for line in value.split("\n"))
-        if isinstance(value, list):
-            return [redact(item) for item in value]
-        if isinstance(value, dict):
-            return {key: redact(item) for key, item in value.items()}
-        return value
+# Leave room for the digest, binding, and sequence metadata in the review envelope.
+OVERLAP_BYTES = 88 * 1024
+MAX_OVERLAP_PACKETS = 24
+TEXT_FRAGMENT = 4096
 
+
+def redact(value):
+    if isinstance(value, str):
+        return "\n".join("[restricted line]" if SENSITIVE.search(line) else line
+                         for line in value.split("\n"))
+    if isinstance(value, list):
+        return [redact(item) for item in value]
+    if isinstance(value, dict):
+        return {key: redact(item) for key, item in value.items()}
+    return value
+
+
+def json_size(value):
+    return len(json.dumps(value))
+
+
+def text_fragments(value):
+    # A scalar can take up to 12 characters in ensure_ascii JSON.
+    for offset in range(0, len(value), TEXT_FRAGMENT):
+        yield {"offset": offset, "text": value[offset:offset + TEXT_FRAGMENT]}
+
+
+def record_parts(record, budget):
+    if json_size(record) <= budget:
+        yield record
+        return
+
+    metadata = {key: value for key, value in record.items() if key not in ("body", "files")}
+    body = record.get("body") or ""
+    files = record.get("files", [])
+    # Repeat identity and revision metadata so each partial record is reviewable.
+    for part in text_fragments(body):
+        yield {**metadata, "body": part["text"], "body_offset": part["offset"], "partial": True}
+    for file in files:
+        part = {**metadata, "files": [file], "partial": True}
+        if json_size(part) <= budget:
+            yield part
+            continue
+        patch = file.get("patch") or ""
+        if not patch:
+            raise Invalid("overlap_record_exceeds_review_bound")
+        for fragment in text_fragments(patch):
+            yield {**metadata, "files": [{**file, "patch": fragment["text"],
+                                         "patch_offset": fragment["offset"]}], "partial": True}
+    if not body and not files:
+        raise Invalid("overlap_record_exceeds_review_bound")
+
+
+def overlap_packets(evidence):
     screened = redact(evidence)
-    if len(json.dumps(screened).encode("utf-8")) > 96 * 1024:
-        raise Invalid("overlap_evidence_exceeds_review_bound")
-    return screened
+    records = screened.pop("records")
+    base = {**screened, "records": []}
+    budget = OVERLAP_BYTES - json_size(base)
+    if budget <= 0:
+        raise Invalid("overlap_context_exceeds_review_bound")
+
+    packets, current, used = [], [], 0
+    for record in records:
+        for part in record_parts(record, budget):
+            cost = json_size(part) + 2  # Reserve the JSON list separator.
+            if cost > budget:
+                raise Invalid("overlap_record_exceeds_review_bound")
+            if used + cost > budget:
+                packets.append(current)
+                if len(packets) >= MAX_OVERLAP_PACKETS:
+                    raise Invalid("overlap_packet_limit_exceeded")
+                current, used = [], 0
+            current.append(part)
+            used += cost
+    packets.append(current)
+    snapshot = digest({**base, "records": records})
+    for index, parts in enumerate(packets, 1):
+        yield {**base, "records": parts, "packet": {
+            "index": index, "total": len(packets), "snapshot": snapshot,
+        }}
+
+
+def assess_overlap(executable, binding, key, candidate, evidence):
+    related, seen = set(), set()
+    continuation = None
+    for packet in overlap_packets(evidence):
+        if continuation is not None:
+            packet["packet"]["previous_summary"] = continuation
+        assessment = review(executable, "overlap", binding, key, candidate, packet)
+        seen.update(record["number"] for record in packet["records"])
+        require(all(number in seen for number in assessment["related"]))
+        if assessment["disposition"] != "clear":
+            # A deferred or covered candidate will never reach drafting.
+            return assessment
+        related.update(assessment["related"])
+        continuation = assessment.get("continuation")
+        if packet["packet"]["index"] < packet["packet"]["total"] and continuation is None:
+            raise Invalid("overlap_continuation_missing")
+    if len(related) > 5:
+        raise Invalid("overlap_references_exceed_review_bound")
+    return {"disposition": "clear", "related": sorted(related)}
 
 
 def batch(args):
@@ -291,13 +382,13 @@ def batch(args):
                                references=[record_url(binding, exact)], reason="exact_open_issue_payload")
                 keys[key] = identity
                 continue
-            evidence = safe_evidence({
+            evidence = {
                 "candidate": {k: c[k] for k in ("behavior", "observed", "scope", "proof")},
                 "records": records,
                 "pinned_sources": sources,
                 "accepted": accepted,
-            })
-            assessment = review(args.reviewer, "overlap", binding, key, c, evidence)
+            }
+            assessment = assess_overlap(args.reviewer, binding, key, c, evidence)
             disposition = assessment["disposition"]
             numbers = assessment["related"]
             require(all(n in by_number for n in numbers))

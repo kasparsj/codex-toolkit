@@ -47,6 +47,7 @@ class RecordingGitHub:
         fixed: bool = False,
         paginated: bool = False,
         truncate_search: bool = False,
+        large_patch: str | None = None,
     ):
         self.sha = sha
         self.incomplete = incomplete
@@ -54,6 +55,7 @@ class RecordingGitHub:
         self.fixed = fixed
         self.paginated = paginated
         self.truncate_search = truncate_search
+        self.large_patch = large_patch
         self.requests: list[tuple[str, str]] = []
         owner = self
 
@@ -151,7 +153,7 @@ class RecordingGitHub:
         if path == "/repos/acme/widget/pulls/17":
             return self._pr_detail()
         if path == "/repos/acme/widget/pulls/17/files":
-            return [{"filename": "app.py", "status": "modified", "patch": "@@ parser timeout"}]
+            return [{"filename": "app.py", "status": "modified", "patch": self.large_patch or "@@ parser timeout"}]
         if path == "/repos/acme/widget/issues/18":
             return self._fixed_issue()
         raise AssertionError(f"unexpected GET {path} {query}")
@@ -229,9 +231,17 @@ phase = request['phase']
 disposition = mode if mode in ('duplicate', 'fixed', 'covered') and phase == 'overlap' else mode if mode == 'defer' else 'clear'
 if disposition == 'fixed' and not any('raise ValueError' in source['content'] for source in request['evidence']['pinned_sources']):
     disposition = 'clear'
+sequence = request['evidence'].get('packet', {{}}) if phase == 'overlap' else {{}}
+patches = [f.get('patch') or '' for record in request['evidence']['records'] for f in record.get('files', [])] if phase == 'overlap' else []
+saw_early = 'Saw early marker in PR 17' in sequence.get('previous_summary', '') or any('EARLY MATCH' in patch for patch in patches)
+if mode in ('late_duplicate', 'late_defer') and saw_early and any('LATE MATCH' in patch for patch in patches):
+    disposition = 'duplicate' if mode == 'late_duplicate' else 'defer'
 response_digest = '0' * 64 if mode == 'stale' else request['digest']
 related = [17] if disposition == 'duplicate' else [18] if disposition in ('fixed', 'covered') else []
-json.dump({{'digest': response_digest, 'disposition': disposition, 'related': related, 'reason': 'fixture decision'}}, sys.stdout)
+response = {{'digest': response_digest, 'disposition': disposition, 'related': related, 'reason': 'fixture decision'}}
+if sequence and sequence['index'] < sequence['total'] and disposition == 'clear' and mode != 'missing_summary':
+    response['continuation'] = 'Saw early marker in PR 17' if saw_early else 'No earlier matches.'
+json.dump(response, sys.stdout)
 """
         )
         self.reviewer.chmod(self.reviewer.stat().st_mode | stat.S_IXUSR)
@@ -448,6 +458,43 @@ json.dump({{'digest': response_digest, 'disposition': disposition, 'related': re
         outcome = json.loads(result.stdout)["dispositions"][0]
         self.assertEqual(outcome["reason"], "search_incomplete")
         self.assertIn("truncated", outcome["coverage_note"])
+        self.assertEqual({method for method, _path in server.requests}, {"GET"})
+
+
+    def test_large_overlap_requires_every_packet_before_drafting(self) -> None:
+        patch = "@@ source fragment EARLY MATCH\n" + ("\U0001f4c4" * 10000) + "LATE MATCH"
+        for mode, expected in (("clear", "drafted"), ("late_duplicate", "duplicate"),
+                               ("late_defer", "deferred")):
+            with self.subTest(mode=mode), RecordingGitHub(
+                self.sha, duplicate=True, large_patch=patch
+            ) as server:
+                self.review_log.write_text("")
+                result = self._batch(server, self._manifest(), mode=mode)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                output = json.loads(result.stdout)
+                self.assertEqual(output["dispositions"][0]["status"], expected)
+                requests = [json.loads(line) for line in self.review_log.read_text().splitlines()]
+                overlap = [packet for packet in requests if packet["phase"] == "overlap"]
+                self.assertGreater(len(overlap), 1)
+                self.assertTrue(all(len(json.dumps(packet)) <= 96 * 1024 for packet in overlap))
+                metadata = [packet["evidence"]["packet"] for packet in overlap]
+                self.assertEqual([item["index"] for item in metadata], list(range(1, len(overlap) + 1)))
+                self.assertEqual({item["total"] for item in metadata}, {len(overlap)})
+                self.assertEqual(len({item["snapshot"] for item in metadata}), 1)
+                self.assertEqual(metadata[-1]["previous_summary"], "Saw early marker in PR 17")
+                fragments = [f for packet in overlap for record in packet["evidence"]["records"]
+                             for f in record.get("files", [])]
+                self.assertEqual("".join(f["patch"] for f in fragments), patch)
+                self.assertEqual(requests[-1]["phase"], "draft" if expected == "drafted" else "overlap")
+                self.assertEqual({method for method, _path in server.requests}, {"GET"})
+
+
+    def test_missing_overlap_continuation_defers_before_drafting(self) -> None:
+        with RecordingGitHub(self.sha, duplicate=True, large_patch="\U0001f4c4" * 10000) as server:
+            result = self._batch(server, self._manifest(), mode="missing_summary")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["dispositions"][0]["reason"],
+                         "overlap_continuation_missing")
         self.assertEqual({method for method, _path in server.requests}, {"GET"})
 
 
