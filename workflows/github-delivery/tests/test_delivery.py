@@ -394,6 +394,8 @@ class DeliveryTest(unittest.TestCase):
         result = delivery.run_spec_kit(state, self.root / "state", runner=runner)
         argv = calls[0][0]
         self.assertEqual(result["status"], "paused")
+        self.assertEqual(argv[argv.index("--python") + 1], sys.executable)
+        self.assertIn(f"python_executable={sys.executable}", argv)
         self.assertIn(f"git+https://github.com/github/spec-kit.git@{delivery.SPEC_KIT_PIN}", argv)
         self.assertIn("plan_gate=true", argv); self.assertIn("implementation_gate=true", argv)
 

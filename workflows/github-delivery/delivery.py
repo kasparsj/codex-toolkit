@@ -232,6 +232,46 @@ def adapter_hashes() -> dict[str, str]:
     return {name: digest_bytes((root / name).read_bytes()) for name in names}
 
 
+def runtime_pins() -> dict[str, str]:
+    """Absolute installed/source runtime identity needed by child processes."""
+    return {
+        # Preserve the environment launcher path. Resolving can escape a venv via its symlink.
+        "python_executable": os.path.abspath(sys.executable),
+        "adapter_dir": str(Path(__file__).resolve().parent),
+    }
+
+
+def validate_protected_state_dir(path: Path, *, expected: Path | None = None,
+                                 label: str = "delivery state") -> Path:
+    """Require an existing owner-only state directory without creating it."""
+    root = path.resolve()
+    if expected is not None:
+        require(root == expected.resolve(), f"{label} directory differs from protected configuration")
+    require(root.is_dir(), f"{label} directory must exist")
+    info = root.stat()
+    require(info.st_uid == os.geteuid() and info.st_mode & 0o077 == 0,
+            f"{label} directory must be owner-only")
+    return root
+
+
+def verify_runtime_pins(state: dict[str, Any]) -> None:
+    """Fail before dispatch when an active run belongs to another installation."""
+    recorded = state.get("runtime")
+    if recorded is None:  # Compatibility for deliveries created before runtime pinning.
+        return
+    require(isinstance(recorded, dict), "pinned runtime identity is invalid")
+    for key, current in runtime_pins().items():
+        pinned = recorded.get(key)
+        require(isinstance(pinned, str) and Path(pinned).is_absolute(),
+                f"pinned runtime {key} is invalid")
+        available = (Path(pinned).is_file() and os.access(pinned, os.X_OK)
+                     if key == "python_executable" else Path(pinned).is_dir())
+        require(available,
+                f"pinned runtime {key} is missing; return to the pinned codex-toolkit installation")
+        require(pinned == current,
+                f"active delivery requires its pinned codex-toolkit installation ({key}: {pinned})")
+
+
 def validate_manifest(manifest: dict[str, Any], kind: str) -> None:
     require(manifest.get("schema_version") == SCHEMA_VERSION, "manifest schema_version must be 1")
     require(manifest.get("kind") == kind, f"manifest kind must be {kind}")
@@ -304,6 +344,9 @@ def run_spec_kit(state: dict[str, Any], state_dir: Path, *, run_id: str | None =
                  runner=subprocess.run, execution_fd: int | None = None) -> dict[str, Any]:
     """Dispatch only the reviewed local YAML through the exact pinned runner."""
     workflow_dir = Path(__file__).resolve().parent
+    python_executable = state.get("runtime", {}).get("python_executable", sys.executable)
+    require(Path(python_executable).is_absolute() and Path(python_executable).is_file(),
+            "pinned Python executable is unavailable")
     validate_delivery_id(state["delivery_id"])
     runner_dir = state_dir.resolve() / "runner" / state["delivery_id"]
     runner_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -319,7 +362,8 @@ def run_spec_kit(state: dict[str, Any], state_dir: Path, *, run_id: str | None =
             os.replace(temporary, trusted_workflow)
         finally:
             with contextlib.suppress(FileNotFoundError): os.unlink(temporary)
-    base = ["uvx", "--from", f"git+https://github.com/github/spec-kit.git@{SPEC_KIT_PIN}",
+    base = ["uvx", "--python", python_executable,
+            "--from", f"git+https://github.com/github/spec-kit.git@{SPEC_KIT_PIN}",
             "specify", "workflow"]
     if run_id:
         argv = base + ["resume", run_id, "--json"]
@@ -338,6 +382,7 @@ def run_spec_kit(state: dict[str, Any], state_dir: Path, *, run_id: str | None =
         for key, value in (("state_dir", str(state_dir.resolve())), ("repo", state["repo"]),
                            ("delivery_id", state["delivery_id"]),
                            ("adapter_dir", str(workflow_dir)),
+                           ("python_executable", python_executable),
                            ("agent_launcher", state["agent"]["launcher"]),
                            ("publisher_launcher", state["publisher_launcher"]),
                            ("worktree", state["agent"]["worktree"]),
@@ -358,7 +403,7 @@ def run_spec_kit(state: dict[str, Any], state_dir: Path, *, run_id: str | None =
     extra = {}
     if protected_delivery(state):
         require(execution_fd is not None, "App runner requires the repository execution lock")
-        argv = [sys.executable, __file__, "_hold-lock", str(execution_fd), *argv]
+        argv = [python_executable, __file__, "_hold-lock", str(execution_fd), *argv]
         env = {key: os.environ[key] for key in ("PATH", "HOME", "LANG", "LC_ALL",
                                                "DELIVERY_PUBLISHER_FAULT_AFTER") if key in os.environ}
         env["DELIVERY_RUNNER_LEASE"] = state["runner_lease"]
@@ -439,7 +484,7 @@ class Coordinator:
             state = {"schema_version": SCHEMA_VERSION, **claim, "attempt": 1,
                      "runner_pid": None, "runner_status": "idle", "policy": policy["_source"],
                      "policy_values": policy, "skill_hashes": skill_hashes(skills_root),
-                     "adapter_hashes": adapter_hashes(),
+                     "adapter_hashes": adapter_hashes(), "runtime": runtime_pins(),
                      "requirements": policy_requirements(policy), "operations": [],
                      "receipts": {}, "history": [{"event": "claimed", "at": utc_now()}],
                      "status": "plan_required" if issue is not None else "rank_required"}
@@ -481,8 +526,30 @@ class Coordinator:
                 "issue": state.get("issue"), "status": "released", "released_at": utc_now()})
 
     def verify_resume(self, state: dict[str, Any], skills_root: Path) -> None:
-        require(skill_hashes(skills_root) == state["skill_hashes"], "pinned skill source changed")
-        require(adapter_hashes() == state["adapter_hashes"], "pinned adapter source changed")
+        verify_runtime_pins(state)
+        workflow_dir = Path(__file__).resolve().parent
+        restore = f"return to the pinned installation or checkout at {workflow_dir}"
+        agent = state.get("agent")
+        if agent:
+            require(Path(agent["skills_root"]).resolve() == skills_root.resolve(),
+                    f"pinned skills path changed; use {agent['skills_root']}")
+            launcher = Path(agent["launcher"])
+            require(launcher.is_file() and os.access(launcher, os.X_OK),
+                    f"restore the pinned agent launcher at {launcher}")
+            if state.get("publisher_launcher"):
+                publisher = Path(state["publisher_launcher"])
+                require(publisher.is_file() and (publisher == workflow_dir / "publisher.py"
+                                                 or os.access(publisher, os.X_OK)),
+                        f"restore the pinned publisher launcher at {publisher}")
+        try:
+            require(skill_hashes(skills_root) == state["skill_hashes"], "pinned skill source changed")
+            require(adapter_hashes() == state["adapter_hashes"], "pinned adapter source changed")
+        except (OSError, DeliveryError) as exc:
+            raise DeliveryError(f"{exc}; {restore}") from exc
+        snapshot = self.root / "runner" / state["delivery_id"] / "workflow.yaml"
+        if snapshot.exists() or state.get("runner_run_id"):
+            require(snapshot.is_file() and snapshot.read_bytes() == (workflow_dir / "workflow.yaml").read_bytes(),
+                    f"restore the trusted workflow snapshot at {snapshot}")
 
     def accept_manifest(self, state: dict[str, Any], manifest: dict[str, Any]) -> dict[str, Any]:
         kind = manifest.get("kind")
@@ -733,8 +800,6 @@ def app_preflight(state: dict[str, Any], *, initial: bool = False) -> None:
 
 
 def app_view(coordinator: Coordinator, state: dict[str, Any]) -> dict[str, Any]:
-    import publisher_adapter
-
     value = {key: state.get(key) for key in ("repo", "issue", "delivery_id", "status", "attempt",
                                              "runner_status", "runner_run_id", "policy")}
     manual = state.get("manual")
@@ -770,6 +835,15 @@ def app_view(coordinator: Coordinator, state: dict[str, Any]) -> dict[str, Any]:
     for stage in ("plan", "implementation"):
         if state["status"] != f"{stage}_review" or stage not in state.get("publication", {}):
             continue
+        try:
+            import publisher_adapter
+        except (ImportError, OSError) as exc:
+            value["runtime_compatibility"] = {
+                "status": "blocked",
+                "error": f"pinned delivery resources unavailable: {exc}",
+            }
+            continue
+
         request = publisher_adapter.approval_request(state, stage)
         pr = request["pr"]
         value["human_review"] = {
@@ -844,9 +918,6 @@ def start_app(coordinator: Coordinator, args, policy: dict[str, Any], agent: dic
 
 
 def resume_app(coordinator: Coordinator, args) -> dict[str, Any]:
-    import manual
-    import publisher_adapter
-
     with mutex(coordinator._repo_dir(args.repo) / "execution.lock") as execution_fd:
         with mutex(coordinator._repo_dir(args.repo) / "step.lock"):
             state = coordinator.load(args.repo, args.delivery_id)
@@ -878,12 +949,16 @@ def resume_app(coordinator: Coordinator, args) -> dict[str, Any]:
             else:
                 require(state["runner_status"] != "running", "interrupted App runner requires recover")
             if developer:
+                import manual
+
                 manual.Session.from_state(state).check_context(state)
             else:
                 app_preflight(state)
             if recovering:
                 state.pop("runner_lease", None)
                 state = coordinator.recover(state, old_pid_alive=False)
+        import publisher_adapter
+
         if getattr(args, "result", None):
             state = coordinator.accept_correction(state, read_json(args.result))
         if state["status"] in APP_FINALIZING | {"manual_ready_pending"}:
@@ -939,11 +1014,9 @@ def resolve_app_start(coordinator, args):
         require(preview.branch_tip(f"repos/{name}", branch, reader) == sha,
                 "default branch changed during selection")
     require(profile.publication is not None, "operator App publication settings are missing")
-    require(Path(profile.publication["state_dir"]).resolve() == coordinator.root,
-            "App state directory differs from protected profile")
-    require(coordinator.root.is_dir() and coordinator.root.stat().st_uid == os.geteuid()
-            and coordinator.root.stat().st_mode & 0o077 == 0,
-            "M2 requires a pre-provisioned owner-only state directory")
+    validate_protected_state_dir(
+        coordinator.root, expected=Path(profile.publication["state_dir"]), label="App state",
+    )
     bindings = coordinator.root / "bindings"
     bindings.mkdir(mode=0o700, exist_ok=True)
     require(not bindings.is_symlink(), "generated binding directory must not be a symlink")
@@ -1040,6 +1113,8 @@ def main(argv: list[str] | None = None) -> int:
             require(getattr(args, "pr", None) is None, "--pr requires developer-mediated mode")
             if args.command == "resume":
                 coordinator.verify_resume(value, args.skills_root)
+                require(value["runner_status"] != "running",
+                        "interrupted runner requires delivery recover")
                 if args.result:
                     value = coordinator.accept_correction(value, read_json(args.result))
                 current = value.get("runner", {}).get("current_step_id")

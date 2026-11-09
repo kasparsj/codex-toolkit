@@ -33,6 +33,86 @@ def _require_disjoint(paths: dict[str, Path]) -> None:
                              f"agent {left_name} and {right_name} must be disjoint")
 
 
+def validate_mount_path_syntax(*paths: Path) -> None:
+    delivery.require(all(not any(char in str(path) for char in ',"\n\r') for path in paths),
+                     "App agent mount paths contain Docker option delimiters")
+
+
+def validate_local_inputs(*, launcher: Path, worktree: Path, scratch: Path,
+                          skills_root: Path, image: str,
+                          expected_sha: str | None = None) -> dict[str, Any]:
+    """Validate local mounts without creating scratch or protected state."""
+    delivery.require(bool(re.fullmatch(r"[^\s@]+@sha256:[0-9a-f]{64}", image)),
+                     "App agent container image must be pinned by digest")
+    delivery.require(not scratch.exists() or scratch.is_dir(),
+                     "agent scratch path exists but is not a directory")
+    resolved = {"launcher": launcher.resolve(), "worktree": worktree.resolve(),
+                "scratch": scratch.resolve(), "skills_root": skills_root.resolve()}
+    validate_mount_path_syntax(*resolved.values())
+    delivery.require(resolved["launcher"].is_file()
+                     and os.access(resolved["launcher"], os.X_OK),
+                     "agent launcher must be executable")
+    delivery.require(resolved["worktree"].is_dir(), "dedicated agent worktree missing")
+    delivery.require(resolved["skills_root"].is_dir(), "pinned skills root missing")
+    _require_disjoint({key: resolved[key] for key in ("worktree", "scratch", "skills_root")})
+    validate_checkout(resolved["worktree"], expected_sha=expected_sha)
+    return {**resolved, "image": image}
+
+
+def validate_mount_boundaries(*, launcher: Path, mounts: dict[str, Path], state_root: Path,
+                              protected_paths: dict[str, Path]) -> None:
+    """Reject containment between agent mounts and operator-controlled paths."""
+    launcher = launcher.resolve()
+    state_root = state_root.resolve()
+    mounts = {name: path.resolve() for name, path in mounts.items()}
+    protected_paths = {name: path.resolve() for name, path in protected_paths.items()}
+    _require_disjoint(mounts)
+    for mounted in mounts.values():
+        delivery.require(not _inside(launcher, mounted),
+                         "App agent launcher must be outside other agent mounts")
+        delivery.require(not _inside(state_root, mounted) and not _inside(mounted, state_root),
+                         "protected delivery state must be outside agent mounts")
+        delivery.require(not _inside(Path.home().resolve(), mounted),
+                         "host home must be outside agent mounts")
+        for label, protected in protected_paths.items():
+            delivery.require(not _inside(protected, mounted) and not _inside(mounted, protected),
+                             f"protected App {label} must be outside agent mounts")
+
+
+def probe_docker(*, image: str, cli_config: Path) -> dict[str, Any]:
+    """Verify the pinned image on a local Docker daemon using an isolated config."""
+    docker_path = Path(shutil.which("docker") or "").resolve()
+    delivery.require(docker_path.is_file() and docker_path.stat().st_mode & 0o022 == 0,
+                     "Docker client must be installed in a non-writable system path")
+    delivery.require(not os.environ.get("DOCKER_HOST") and not os.environ.get("DOCKER_CONTEXT"),
+                     "ambient Docker host or context override is forbidden")
+    delivery.require(cli_config.is_dir() and not cli_config.is_symlink(),
+                     "isolated Docker config directory missing")
+    info = cli_config.stat()
+    delivery.require(info.st_uid == os.geteuid() and info.st_mode & 0o077 == 0,
+                     "isolated Docker config directory must be owner-only")
+    runtime_env = {key: os.environ[key] for key in ("PATH", "LANG", "LC_ALL") if key in os.environ}
+    runtime_env.update(HOME=str(cli_config), DOCKER_CONFIG=str(cli_config))
+
+    def probe(*args: str) -> subprocess.CompletedProcess:
+        try:
+            return subprocess.run([str(docker_path), *args], text=True, capture_output=True,
+                                  check=False, env=runtime_env, timeout=30)
+        except subprocess.TimeoutExpired as exc:
+            raise delivery.DeliveryError("Docker preflight timed out") from exc
+
+    context = probe("context", "inspect", "--format", '{{(index .Endpoints "docker").Host}}')
+    delivery.require(context.returncode == 0 and context.stdout.strip().startswith("unix://"),
+                     "App agent isolation requires a local Unix-socket Docker context")
+    server = probe("info", "--format", "{{json .ServerVersion}}")
+    delivery.require(server.returncode == 0 and server.stdout.strip(),
+                     "Docker daemon unavailable for App agent isolation")
+    inspect = probe("image", "inspect", image, "--format", "{{.Id}}")
+    delivery.require(inspect.returncode == 0 and inspect.stdout.strip().startswith("sha256:"),
+                     "pinned App agent container image unavailable")
+    return {"image": image, "runtime": str(docker_path), "env": runtime_env}
+
+
 def _git_output(worktree: Path, *args: str, allow_missing: bool = False) -> str:
     env = {"PATH": os.environ.get("PATH", ""), "GIT_CONFIG_NOSYSTEM": "1",
            "GIT_CONFIG_GLOBAL": os.devnull, "GIT_NO_LAZY_FETCH": "1",
@@ -118,17 +198,13 @@ def preflight(*, state: dict[str, Any], launcher: Path, worktree: Path,
     delivery.require(agent.get("isolation_profile") == "container",
                      "App mode requires the container isolation profile")
     image = agent.get("container_image")
-    delivery.require(isinstance(image, str) and re.fullmatch(r"[^\s@]+@sha256:[0-9a-f]{64}", image),
-                     "App agent container image must be pinned by digest")
-    launcher = launcher.resolve(); worktree = worktree.resolve()
-    scratch = scratch.resolve(); skills_root = skills_root.resolve()
-    delivery.require(launcher.is_file() and os.access(launcher, os.X_OK),
-                     "agent launcher must be executable")
-    delivery.require(worktree.is_dir(), "dedicated agent worktree missing")
-    delivery.require(skills_root.is_dir(), "pinned skills root missing")
+    delivery.require(isinstance(image, str), "App agent container image must be pinned by digest")
+    local = validate_local_inputs(launcher=launcher, worktree=worktree, scratch=scratch,
+                                  skills_root=skills_root, image=image,
+                                  expected_sha=state["policy"]["sha"])
+    launcher = local["launcher"]; worktree = local["worktree"]
+    scratch = local["scratch"]; skills_root = local["skills_root"]
     scratch.mkdir(parents=True, exist_ok=True, mode=0o700)
-    _require_disjoint({"worktree": worktree, "scratch": scratch, "skills": skills_root})
-    validate_checkout(worktree, expected_sha=state["policy"]["sha"])
     publisher_root = Path(app.get("publisher_root", "")).resolve()
     delivery.require(len(publisher_root.parents) >= 3 and publisher_root.name == "publisher"
                      and publisher_root.parents[1].name == "repos",
@@ -139,60 +215,32 @@ def preflight(*, state: dict[str, Any], launcher: Path, worktree: Path,
     snapshot = Path(agent.get("read_snapshot", expected_snapshot)).resolve()
     delivery.require(snapshot == expected_snapshot,
                      "trusted read snapshot must use the protected delivery state path")
-    for mounted in (worktree, scratch, skills_root):
-        delivery.require(not _inside(launcher, mounted),
-                         "App agent launcher must be outside other agent mounts")
-        delivery.require(not _inside(state_root, mounted) and not _inside(mounted, state_root),
-                         "protected delivery state must be outside agent mounts")
-        delivery.require(not _inside(Path.home().resolve(), mounted),
-                         "host home must be outside agent mounts")
-        protected_labels = ("config", "publisher_root")
-        if state.get("credential_mode") == "app":
-            protected_labels += ("private_key_path",)
-        elif app.get("read_token_file"):
-            protected_labels += ("read_token_file",)
-        if app.get("operator_app"):
-            protected_labels += ("operator_app", "operator_policy")
-        for label in protected_labels:
-            raw_protected = app.get(label)
-            delivery.require(isinstance(raw_protected, str) and Path(raw_protected).is_absolute(),
-                             f"protected App {label} path must be absolute")
-            protected = Path(raw_protected).resolve()
-            delivery.require(not _inside(protected, mounted)
-                             and not _inside(mounted, protected),
-                             f"protected App {label} must be outside agent mounts")
+    protected_labels = ["config", "publisher_root"]
+    if state.get("credential_mode") == "app":
+        protected_labels.append("private_key_path")
+    elif app.get("read_token_file"):
+        protected_labels.append("read_token_file")
+    if app.get("operator_app"):
+        protected_labels.extend(("operator_app", "operator_policy"))
+    protected_paths = {}
+    for label in protected_labels:
+        raw_protected = app.get(label)
+        delivery.require(isinstance(raw_protected, str) and Path(raw_protected).is_absolute(),
+                         f"protected App {label} path must be absolute")
+        protected_paths[label] = Path(raw_protected)
+    validate_mount_boundaries(launcher=launcher,
+                              mounts={"worktree": worktree, "scratch": scratch,
+                                      "skills": skills_root},
+                              state_root=state_root, protected_paths=protected_paths)
     _, snapshot_digest = validate_snapshot(snapshot, repo=state["repo"],
         repository_id=app.get("repository_id"),
         repository_full_name=app.get("repository_full_name"), policy_sha=state["policy"]["sha"])
-    docker = agent.get("container_runtime", "docker")
-    delivery.require(docker == "docker", "unsupported App agent container runtime")
-    docker_path = Path(shutil.which(docker) or "").resolve()
-    delivery.require(docker_path.is_file() and docker_path.stat().st_mode & 0o022 == 0,
-                     "Docker client must be installed in a non-writable system path")
-    delivery.require(not os.environ.get("DOCKER_HOST") and not os.environ.get("DOCKER_CONTEXT"),
-                     "ambient Docker host or context override is forbidden")
+    delivery.require(agent.get("container_runtime", "docker") == "docker",
+                     "unsupported App agent container runtime")
     cli_config = publisher_root / "docker-cli"
     cli_config.mkdir(mode=0o700, exist_ok=True)
-    runtime_env = {key: os.environ[key] for key in ("PATH", "LANG", "LC_ALL") if key in os.environ}
-    runtime_env.update(HOME=str(cli_config), DOCKER_CONFIG=str(cli_config))
-    def probe(*args: str) -> subprocess.CompletedProcess:
-        try:
-            return subprocess.run([str(docker_path), *args], text=True, capture_output=True,
-                                  check=False, env=runtime_env, timeout=30)
-        except subprocess.TimeoutExpired as exc:
-            raise delivery.DeliveryError("Docker preflight timed out") from exc
-
-    context = probe("context", "inspect", "--format", '{{(index .Endpoints "docker").Host}}')
-    delivery.require(context.returncode == 0 and context.stdout.strip().startswith("unix://"),
-                     "App agent isolation requires a local Unix-socket Docker context")
-    info = probe("info", "--format", "{{json .ServerVersion}}")
-    delivery.require(info.returncode == 0 and info.stdout.strip(),
-                     "Docker daemon unavailable for App agent isolation")
-    inspect = probe("image", "inspect", image, "--format", "{{.Id}}")
-    delivery.require(inspect.returncode == 0 and inspect.stdout.strip().startswith("sha256:"),
-                     "pinned App agent container image unavailable")
-    return {"image": image, "runtime": str(docker_path), "snapshot": snapshot,
-            "policy_sha": state["policy"]["sha"], "env": runtime_env,
+    runtime = probe_docker(image=image, cli_config=cli_config)
+    return {**runtime, "snapshot": snapshot, "policy_sha": state["policy"]["sha"],
             "snapshot_sha256": snapshot_digest}
 
 
@@ -200,9 +248,7 @@ def command(*, profile: dict[str, Any], launcher: Path, worktree: Path,
             scratch: Path, skills_root: Path) -> list[str]:
     """Build the auditable Docker invocation. No network or ambient host mounts."""
     uid = os.getuid(); gid = os.getgid()
-    delivery.require(all(not any(char in str(path) for char in ',"\n\r')
-                         for path in (worktree, scratch, skills_root, launcher, profile["snapshot"])),
-                     "App agent mount paths contain Docker option delimiters")
+    validate_mount_path_syntax(worktree, scratch, skills_root, launcher, profile["snapshot"])
     return [
         profile["runtime"], "run", "--rm", "--interactive", "--init", "--pull", "never",
         "--network", "none",

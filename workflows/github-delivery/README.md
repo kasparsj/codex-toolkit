@@ -24,6 +24,86 @@ The executable boundary is intentional:
   in a protected publisher directory. Credentialed Git stays outside the agent
   checkout and uses its own config, hooks, and remote settings.
 
+## Installed command
+
+The project wheel bundles these canonical modules, `workflow.yaml`, its fixture,
+and the complete `next-issue`, `plan-pr`, `implement-plan`, and `pr-closeout`
+skill packages. Build and install it into an isolated Python 3.11 or later tool
+environment:
+
+```sh
+uv build --python 3.11
+uv tool install --python 3.11 dist/codex_toolkit-0.1.0-py3-none-any.whl
+```
+
+To verify the distributable inputs and rebuild the wheel from its source
+distribution:
+
+```sh
+mkdir -p dist/rebuilt
+uv build --python 3.11 --wheel dist/codex_toolkit-0.1.0.tar.gz \
+  --out-dir dist/rebuilt
+python3 scripts/verify_distribution.py \
+  --sdist dist/codex_toolkit-0.1.0.tar.gz \
+  --wheel dist/codex_toolkit-0.1.0-py3-none-any.whl \
+  --wheel dist/rebuilt/codex_toolkit-0.1.0-py3-none-any.whl
+```
+
+Run the installed delivery fixture with a real Python older than 3.11 first on
+`PATH`. The fixture uses disposable Git repositories and substitutes the
+GitHub HTTP and Docker boundaries.
+
+```sh
+uv run --no-project --python 3.11 python workflows/github-delivery/tests/installed_e2e.py \
+  dist/codex_toolkit-0.1.0-py3-none-any.whl --old-python /absolute/path/python3.9
+```
+
+Run `codex-toolkit delivery doctor` first. It reports preview and full-delivery
+readiness separately and does not create a claim, invoke the launcher, or write
+to GitHub. The installed sequence is:
+
+```sh
+codex-toolkit delivery doctor --repo OWNER/REPO \
+  --agent-launcher /absolute/path/launcher \
+  --worktree /absolute/path/dedicated-checkout \
+  --agent-scratch /absolute/path/scratch \
+  --container-image IMAGE@sha256:DIGEST
+codex-toolkit delivery preview --repo OWNER/REPO
+codex-toolkit delivery start --repo OWNER/REPO --issue NUMBER \
+  --agent-launcher /absolute/path/launcher \
+  --worktree /absolute/path/dedicated-checkout \
+  --agent-scratch /absolute/path/scratch \
+  --container-image IMAGE@sha256:DIGEST
+codex-toolkit delivery status --repo OWNER/REPO
+codex-toolkit delivery resume --repo OWNER/REPO
+```
+
+The target repository is inferred only from an unambiguous GitHub remote. Use
+`--repo OWNER/REPO` outside Git or when remotes disagree. Every subcommand also
+accepts `--developer-config /absolute/path/developer.json`. Without that flag,
+the lowercased repository selects the owner-controlled default at
+`~/.config/codex-toolkit/delivery/<owner>/<repo>.json`. Configuration found in
+the target checkout is ignored. `start` also accepts `--delivery-id`, while
+`status`, `resume`, and `recover` accept it to select an existing delivery.
+Manual continuation retains `resume --pr NUMBER` and `resume --result PATH`.
+When the four delivery inputs are omitted from `doctor`, it reports each as a
+full-delivery blocker and still reports preview readiness separately.
+
+An active delivery pins its installed workflow, skills, interpreter, launcher,
+and adapter paths. Keep that installed version available until the run releases
+its claim. A mismatch or missing pinned path stops before dispatch and preserves
+the state and claim. After a hard kill, ordinary `resume` refuses a still-running
+record. Once the recorded runner is dead, `recover` uses the existing linked-run
+safeguards and the same claim and pins:
+
+```sh
+codex-toolkit delivery recover --repo OWNER/REPO \
+  --developer-config /absolute/path/developer.json \
+  --delivery-id DELIVERY_ID
+```
+
+Follow it with `resume` as needed.
+
 ## Repository policy
 
 Each target repository opts in with `.github/delivery.toml` on an explicitly
