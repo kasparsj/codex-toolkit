@@ -1,10 +1,10 @@
 # Codex Toolkit
 
-Use Codex to triage feedback, take a GitHub issue from selection through PR review, or hand work off to a fresh agent or chat. Invoke individual skills in Codex, or use the separately configured GitHub delivery runner to coordinate the issue-to-PR sequence.
+Use Codex to audit repositories, triage feedback, take a GitHub issue from selection through PR review, or hand work off to a fresh agent or chat. Invoke individual skills in Codex, or use the separately configured GitHub delivery runner to coordinate the issue-to-PR sequence.
 
 ## Install the interactive skills
 
-With Node.js 22.20 or later, install all seven skills for Codex.
+With Node.js 22.20 or later, install all skills for Codex.
 
 ```bash
 npx skills add kasparsj/codex-toolkit --skill '*' -a codex -g
@@ -28,6 +28,12 @@ Start at the step you need. The write behavior below applies to the examples sho
 | [`pr-closeout`](skills/pr-closeout/SKILL.md) | `$pr-closeout https://github.com/owner/repo/pull/43` | Checks CI, approvals, and stack dependencies. Read-only by default. Add `--merge` to merge a ready PR and reconcile its linked issue. |
 
 `next-issue --review` requires [ECC’s `issue-review` skill](https://github.com/affaan-m/ecc/blob/main/skills/issue-review/SKILL.md), installed separately.
+
+## Improve a repository
+
+`$improve owner/repo` audits a pinned GitHub revision and returns up to three issue drafts. It checks open and closed issues and pull requests, including drafts, for overlap. Each proposed issue includes source evidence and testable acceptance criteria. A run can defer findings when evidence or review is incomplete.
+
+Improve uses Python 3.10+, Git and a configured independent reviewer. Its bundled helper makes read-only GitHub requests. See the [skill](skills/improve/SKILL.md) and [reviewer setup](skills/improve/references/helper.md).
 
 ## Feedback and handoff skills
 
