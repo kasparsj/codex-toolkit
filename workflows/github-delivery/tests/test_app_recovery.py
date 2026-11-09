@@ -37,7 +37,7 @@ reviewer_ids = [101]
 
 
 class AppGitHub(FakeClient):
-    workflow_content = b"name: fixture\n"
+    workflow_content = (Path(publisher.__file__).parent / "fixtures" / "delivery-fixture.yml").read_bytes()
 
     def __init__(self):
         super().__init__(POLICY)
@@ -46,6 +46,7 @@ class AppGitHub(FakeClient):
         self.jobs = []
         self.pushes = []
         self.branch_protected = False
+        self.review_label_exists = True
 
     def workflow(self):
         return {"id": 17, "path": ".github/workflows/test.yml", "state": "active"}
@@ -65,6 +66,8 @@ class AppGitHub(FakeClient):
         if endpoint.endswith("/branches/main"):
             return {"protected": self.branch_protected}
         if "/labels/" in endpoint and method == "GET":
+            if not self.review_label_exists:
+                raise delivery.DeliveryError("GitHub App request failed with HTTP 404")
             return {"name": "status: review"}
         if endpoint.endswith("/actions/workflows/17"):
             return self.workflow()
@@ -104,6 +107,7 @@ class AppRecoveryTest(unittest.TestCase):
             session.binding = copy.copy(session.binding)
             session.binding.repository_id = 77
             session.binding.ci = {**session.binding.ci,
+                                  "required_job": "verify-fixture",
                                   "workflow_sha256": hashlib.sha256(client.workflow_content).hexdigest()}
             source = {"ref": "refs/heads/main", "sha": client.base_sha,
                       "digest": hashlib.sha256(POLICY).hexdigest()}
@@ -151,6 +155,20 @@ class AppRecoveryTest(unittest.TestCase):
                     result = execute(preflight)
                 self.assertIs(result["identity"]["default_branch_protected"], protected)
                 self.assertIs(result["snapshot"]["repository"]["protected"], protected)
+            safe_workflow = client.workflow_content
+            client.workflow_content = safe_workflow.replace(b"runs-on: ubuntu-latest", b"runs-on: [self-hosted, linux]")
+            session.binding.ci["workflow_sha256"] = hashlib.sha256(client.workflow_content).hexdigest()
+            with self.assertRaisesRegex(delivery.DeliveryError, "shipped M1 fixture workflow"):
+                execute(preflight)
+            client.workflow_content = safe_workflow
+            session.binding.ci["workflow_sha256"] = hashlib.sha256(safe_workflow).hexdigest()
+            same_as_base = {**plan, "expected": {**plan_expected, "head": "main"},
+                            "policy_values": {**plan["policy_values"], "branches": {
+                                **plan["policy_values"]["branches"], "plan_template": "main"}}}
+            service = publisher.Publisher(repo=common["target_repo"], root=root, client=client,
+                                          app_session=session)
+            with self.assertRaisesRegex(delivery.DeliveryError, "branch must differ"):
+                service._publish(same_as_base)
             client.policy_sha = "f" * 40
             with self.assertRaisesRegex(delivery.DeliveryError, "policy ref moved"):
                 execute(preflight)
@@ -174,6 +192,12 @@ class AppRecoveryTest(unittest.TestCase):
                         "existing_review_label": "status: review",
                         "approval": impl_approval, "plan_approval": plan_approval}
 
+            original_body = client.prs[1]["body"]
+            client.prs[1]["body"] += "delivery-id: conflicting\n"
+            with self.assertRaisesRegex(delivery.DeliveryError, "provenance changed"):
+                execute(finalize)
+            self.assertTrue(client.prs[1]["draft"])
+            client.prs[1]["body"] = original_body
             self.assertEqual(execute(finalize)["status"], "pre_ready_ci_waiting")
             client.runs = [{"id": 41, "workflow_id": 17, "event": "pull_request", "run_attempt": 1,
                             "head_sha": impl_pr["head_sha"], "head_branch": impl_pr["head"],
@@ -187,7 +211,13 @@ class AppRecoveryTest(unittest.TestCase):
                 "pull_requests": [{"number": plan_pr["number"], "head": {"sha": plan_pr["head_sha"]},
                                    "base": {"sha": client.base_sha}}],
             })
-            client.jobs = [{"id": 50, "name": "test", "status": "completed", "conclusion": "success"}]
+            client.jobs = [{"id": 50, "name": "verify-fixture", "status": "completed", "conclusion": "success"}]
+            client.review_label_exists = False
+            with self.assertRaisesRegex(delivery.DeliveryError, "could not verify existing review label"):
+                execute(finalize)
+            self.assertTrue(client.prs[1]["draft"])
+            self.assertEqual(client.mutations, [("create", 1), ("edit", 1)])
+            client.review_label_exists = True
             lose_response(finalize, "ready")
             lose_response(finalize, "label")
             final = execute(finalize)

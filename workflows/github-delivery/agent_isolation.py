@@ -140,6 +140,8 @@ def preflight(*, state: dict[str, Any], launcher: Path, worktree: Path,
     delivery.require(snapshot == expected_snapshot,
                      "trusted read snapshot must use the protected delivery state path")
     for mounted in (worktree, scratch, skills_root):
+        delivery.require(not _inside(launcher, mounted),
+                         "App agent launcher must be outside other agent mounts")
         delivery.require(not _inside(state_root, mounted) and not _inside(mounted, state_root),
                          "protected delivery state must be outside agent mounts")
         delivery.require(not _inside(Path.home().resolve(), mounted),
@@ -166,17 +168,20 @@ def preflight(*, state: dict[str, Any], launcher: Path, worktree: Path,
     cli_config.mkdir(mode=0o700, exist_ok=True)
     runtime_env = {key: os.environ[key] for key in ("PATH", "LANG", "LC_ALL") if key in os.environ}
     runtime_env.update(HOME=str(cli_config), DOCKER_CONFIG=str(cli_config))
-    context = subprocess.run([str(docker_path), "context", "inspect", "--format",
-                              '{{(index .Endpoints "docker").Host}}'], text=True,
-                             capture_output=True, check=False, env=runtime_env)
+    def probe(*args: str) -> subprocess.CompletedProcess:
+        try:
+            return subprocess.run([str(docker_path), *args], text=True, capture_output=True,
+                                  check=False, env=runtime_env, timeout=30)
+        except subprocess.TimeoutExpired as exc:
+            raise delivery.DeliveryError("Docker preflight timed out") from exc
+
+    context = probe("context", "inspect", "--format", '{{(index .Endpoints "docker").Host}}')
     delivery.require(context.returncode == 0 and context.stdout.strip().startswith("unix://"),
                      "App agent isolation requires a local Unix-socket Docker context")
-    probe = subprocess.run([str(docker_path), "info", "--format", "{{json .ServerVersion}}"],
-                           text=True, capture_output=True, check=False, env=runtime_env)
-    delivery.require(probe.returncode == 0 and probe.stdout.strip(),
+    info = probe("info", "--format", "{{json .ServerVersion}}")
+    delivery.require(info.returncode == 0 and info.stdout.strip(),
                      "Docker daemon unavailable for App agent isolation")
-    inspect = subprocess.run([str(docker_path), "image", "inspect", image, "--format", "{{.Id}}"],
-                             text=True, capture_output=True, check=False, env=runtime_env)
+    inspect = probe("image", "inspect", image, "--format", "{{.Id}}")
     delivery.require(inspect.returncode == 0 and inspect.stdout.strip().startswith("sha256:"),
                      "pinned App agent container image unavailable")
     return {"image": image, "runtime": str(docker_path), "snapshot": snapshot,

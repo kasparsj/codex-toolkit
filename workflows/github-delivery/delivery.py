@@ -220,7 +220,8 @@ def skill_hashes(skills_root: Path) -> dict[str, str]:
 def adapter_hashes() -> dict[str, str]:
     root = Path(__file__).resolve().parent
     names = ("delivery.py", "adapter.py", "publisher_adapter.py", "publisher.py",
-             "trusted_git.py", "workflow.yaml", "app_auth.py", "agent_isolation.py")
+             "trusted_git.py", "workflow.yaml", "app_auth.py", "agent_isolation.py",
+             "fixtures/delivery-fixture.yml")
     return {name: digest_bytes((root / name).read_bytes()) for name in names}
 
 
@@ -951,6 +952,8 @@ def _pid_alive(pid: int) -> bool:
 
 
 if __name__ == "__main__":
+    # Adapters imported by the CLI must share its DeliveryError and state helpers.
+    sys.modules["delivery"] = sys.modules[__name__]
     if sys.argv[1:2] == ["_hold-lock"]:
         # A surviving runner retains the open lock description if its coordinator dies.
         os.fstat(int(sys.argv[2]))

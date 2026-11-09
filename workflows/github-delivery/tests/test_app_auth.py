@@ -91,7 +91,7 @@ class AppAuthTest(unittest.TestCase):
             "installation": {"id": 33, "account_id": 44},
             "repository": {"id": 55, "full_name": "acme/private-fixture"},
             "permissions": {"metadata": "read", "contents": "write",
-                            "pull_requests": "write", "issues": "read", "actions": "read"},
+                            "pull_requests": "write", "issues": "write", "actions": "read"},
             "private_key_path": str(self.key),
             "state_dir": str(self.state),
             "allowed_path_prefixes": ["docs/", "src/"],
@@ -112,11 +112,11 @@ class AppAuthTest(unittest.TestCase):
         digest = hashlib.sha256(self.config.read_bytes()).hexdigest()
         return app_auth.AppBinding.load(self.config, expected_digest=digest)
 
-    def test_issues_write_can_be_pinned_for_tracking(self):
-        self.value["permissions"]["issues"] = "write"
+    def test_issues_read_is_rejected_before_tracking_can_be_stranded(self):
+        self.value["permissions"]["issues"] = "read"
         self._write_config()
-        session, _ = self.mint()
-        self.assertEqual(session.binding.permissions["issues"], "write")
+        with self.assertRaisesRegex(app_auth.delivery.DeliveryError, "unsupported permissions"):
+            self.binding()
 
     def mint(self, binding=None, api=None):
         binding = binding or self.binding()

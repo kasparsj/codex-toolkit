@@ -9,7 +9,7 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import patch
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 
 ROOT = Path(__file__).parents[1]
@@ -85,7 +85,7 @@ class FakeClient:
             self.mutations.append(("edit", number))
             return self.prs[number]
         if "/labels/" in endpoint and method == "GET":
-            return {"name": endpoint.rsplit("/", 1)[1]}
+            return {"name": unquote(endpoint.rsplit("/", 1)[1])}
         if endpoint.endswith("/issues/42/labels") and method == "POST":
             self.issue_labels.update(payload["labels"])
             self.mutations.append(("label", tuple(payload["labels"])))

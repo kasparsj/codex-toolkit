@@ -1,6 +1,7 @@
 import importlib.util
 import json
 from pathlib import Path
+import subprocess
 from types import SimpleNamespace
 import sys
 import tempfile
@@ -79,6 +80,23 @@ class AgentIsolationTests(unittest.TestCase):
     def test_preflight_rejects_unpinned_image_before_runtime_probe(self):
         self.state["agent"]["container_image"] = "example/agent:latest"
         with self.assertRaisesRegex(delivery.DeliveryError, "pinned by digest"):
+            agent_isolation.preflight(state=self.state, launcher=self.launcher,
+                worktree=self.worktree, scratch=self.scratch, skills_root=self.skills)
+
+    def test_preflight_rejects_launcher_also_exposed_in_writable_checkout(self):
+        launcher = self.worktree / "launcher"
+        self.launcher.rename(launcher)
+        with patch.object(agent_isolation, "validate_checkout"), self.assertRaisesRegex(
+                delivery.DeliveryError, "launcher must be outside"):
+            agent_isolation.preflight(state=self.state, launcher=launcher,
+                worktree=self.worktree, scratch=self.scratch, skills_root=self.skills)
+
+    def test_docker_probe_timeout_blocks_preflight(self):
+        with patch.object(agent_isolation, "validate_checkout"), \
+             patch.object(agent_isolation.shutil, "which", return_value=str(self.launcher)), \
+             patch.object(agent_isolation.subprocess, "run",
+                          side_effect=subprocess.TimeoutExpired("docker", 30)), \
+             self.assertRaisesRegex(delivery.DeliveryError, "Docker preflight timed out"):
             agent_isolation.preflight(state=self.state, launcher=self.launcher,
                 worktree=self.worktree, scratch=self.scratch, skills_root=self.skills)
 

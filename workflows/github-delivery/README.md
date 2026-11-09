@@ -261,6 +261,9 @@ Prepare a private GitHub.com repository with `main` as the default branch, one u
 open issue, an existing tracking label, and an Actions workflow on `main` that
 runs for draft `pull_request` events on open and synchronize. Audit the
 workflow and any other workflow triggered by delivery branch or PR updates.
+Use the shipped [M1 fixture workflow](fixtures/delivery-fixture.yml) verbatim
+at the path recorded in the App binding. It checks that `docs/greeting.md` exists
+and is nonempty. App preflight rejects workflow variants.
 Use GitHub-hosted runners, read-only checkout credentials, a pinned checkout
 action with credential persistence disabled, and a harmless fixture job with
 no secrets, deployments, or `pull_request_target`. Keep the default branch
@@ -318,7 +321,8 @@ Prepare a self-contained dedicated checkout at that commit and set
 `git config --local delivery.agentCheckout true`. Remove credential-bearing
 remotes and local credential helpers. Supply a locally available image pinned
 by registry digest and an operator-controlled agent launcher compatible with
-that image. The agent runs in a network-disabled Docker container with its
+that image. Keep the launcher outside the checkout, output directory, and
+skills root. The agent runs in a network-disabled Docker container with its
 own writable checkout and output directory. The launcher needs an in-container
 agent runtime capable of operating offline. It reads the adapter JSON packet
 on stdin, reads private issue and PR data from its mounted snapshot, and

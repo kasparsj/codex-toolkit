@@ -2,7 +2,9 @@
 
 import os
 from copy import deepcopy
+import json
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 from types import SimpleNamespace
@@ -85,6 +87,19 @@ class AppCoordinatorTest(unittest.TestCase):
         self.assertEqual(delivery.read_json(self.active)["status"], "active")
         self.assertEqual(self.coordinator.load(self.repo, self.state["delivery_id"])["status"],
                          "pre_ready_ci_waiting")
+
+    def test_cli_reports_imported_launcher_errors_as_blocked_json(self):
+        completed = subprocess.run(
+            [sys.executable, delivery.__file__, "resume", "--state-dir", str(self.coordinator.root),
+             "--repo", self.repo, "--delivery-id", self.state["delivery_id"],
+             "--skills-root", str(self.skills)],
+            text=True, capture_output=True, check=False,
+        )
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(json.loads(completed.stdout), {
+            "status": "blocked", "error": "publisher launcher must be executable",
+        })
+        self.assertEqual(completed.stderr, "")
 
     def test_app_correction_invalidates_old_review_and_keeps_owned_draft(self):
         self.publish_locally()

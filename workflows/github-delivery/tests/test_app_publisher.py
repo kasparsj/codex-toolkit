@@ -163,6 +163,9 @@ class AppPublisherTest(unittest.TestCase):
         ]
         with self.assertRaisesRegex(delivery.DeliveryError, "ambiguous"):
             self.publisher._ci_status(self.pr)
+        evidence = self.publisher._gate_ci(self.pr)
+        self.assertEqual(evidence["reason"], "ambiguous_readback")
+        self.assertEqual(evidence["diagnostic"], "CI required job result is ambiguous")
 
     def test_ci_ignores_historical_plan_run_on_same_pr(self):
         self.client.runs = [

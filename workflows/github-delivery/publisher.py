@@ -321,33 +321,20 @@ class Publisher:
         delivery.require(workflow_content.get("encoding") == "base64",
                          "trusted CI workflow encoding is unsupported")
         try:
-            workflow_text = base64.b64decode(
+            workflow_bytes = base64.b64decode(
                 "".join(workflow_content["content"].split()), validate=True,
-            ).decode()
-        except (KeyError, ValueError, UnicodeDecodeError) as exc:
+            )
+        except (KeyError, ValueError) as exc:
             raise delivery.DeliveryError("trusted CI workflow content is invalid") from exc
         expected_workflow_digest = binding.ci.get("workflow_sha256")
         delivery.require(
             isinstance(expected_workflow_digest, str)
-            and hashlib.sha256(workflow_text.encode()).hexdigest() == expected_workflow_digest,
+            and hashlib.sha256(workflow_bytes).hexdigest() == expected_workflow_digest,
             "trusted CI workflow digest differs from the App binding",
         )
-        lowered = workflow_text.lower()
-        delivery.require("pull_request_target" not in lowered,
-                         "trusted CI uses pull_request_target")
-        delivery.require("secrets." not in lowered and "runs-on: self-hosted" not in lowered,
-                         "trusted CI exposes privileged execution")
-        delivery.require("permissions: write-all" not in lowered,
-                         "trusted CI grants write-all permissions")
-        delivery.require(not re.search(r"(?m)^\s*[a-z_-]+:\s*write\s*(?:#.*)?$", lowered),
-                         "trusted CI grants a write permission")
-        delivery.require(not re.search(r"(?m)^\s*environment\s*:", lowered),
-                         "trusted CI targets a deployment environment")
-        if "actions/checkout@" in lowered:
-            delivery.require(
-                bool(re.search(r"(?m)^\s*persist-credentials\s*:\s*false\s*(?:#.*)?$", lowered)),
-                "trusted CI checkout must disable persisted credentials",
-            )
+        fixture = Path(__file__).resolve().parent / "fixtures" / "delivery-fixture.yml"
+        delivery.require(workflow_bytes == fixture.read_bytes() and binding.ci["required_job"] == "verify-fixture",
+                         "trusted CI must match the shipped M1 fixture workflow")
         reviewer_ids = sorted({
             reviewer_id
             for stage in ("plan", "implementation")
@@ -373,6 +360,8 @@ class Publisher:
             "author_id": value.get("user", {}).get("id"),
         } for value in pulls]
         owned_branch = policy["branches"]["plan_template"].format(issue=issue_number)
+        delivery.require(owned_branch != default_branch,
+                         "App delivery branch must differ from the default branch")
         for pull in sanitized_pulls:
             if pull["head"] != owned_branch:
                 continue
@@ -806,9 +795,11 @@ class Publisher:
             return self._ci_status(pr)
         except delivery.DeliveryError as exc:
             reason = "ambiguous_readback" if "ambiguous" in str(exc) else "unreadable_ci"
-            return {"status": "unknown", "reason": reason, "head_sha": pr["head_sha"]}
-        except (AttributeError, KeyError, TypeError, ValueError):
-            return {"status": "unknown", "reason": "malformed_readback", "head_sha": pr["head_sha"]}
+            return {"status": "unknown", "reason": reason, "head_sha": pr["head_sha"],
+                    "diagnostic": str(exc)}
+        except (AttributeError, KeyError, TypeError, ValueError) as exc:
+            return {"status": "unknown", "reason": "malformed_readback", "head_sha": pr["head_sha"],
+                    "diagnostic": type(exc).__name__}
 
     def _pr_body(self, packet: dict[str, Any]) -> str:
         expected = packet["expected"]
@@ -886,6 +877,9 @@ class Publisher:
         return exact[0] if exact else None
 
     def _verify_pr_provenance(self, packet: dict[str, Any], pr: dict[str, Any]) -> None:
+        if packet.get("credential_mode") == "app":
+            delivery.require(pr["body"] == self._pr_body(packet), "pull request provenance changed")
+            return
         expected = packet["expected"]
         _, owner, name = repo_parts(self.repo)
         markers = (
@@ -1010,6 +1004,9 @@ class Publisher:
         template_key = "plan_template" if packet["action"] == "publish_plan" else "implementation_template"
         expected_head = policy["branches"][template_key].format(issue=issue)
         delivery.require(expected["head"] == expected_head, "publication branch violates policy")
+        if packet.get("credential_mode") == "app":
+            delivery.require(expected_head not in {expected["base"], policy["branches"]["default_parent"]},
+                             "App delivery branch must differ from the default branch and base")
         prefixes = policy["branches"].get("allowed_parent_prefixes", [])
         delivery.require(
             expected["base"] == policy["branches"]["default_parent"]
@@ -1262,6 +1259,8 @@ class Publisher:
             delivery.require(current[field] == expected[field], f"pull request {field} changed")
         delivery.require(current["draft"] and current["state"] == "OPEN", "review target is not an open draft")
         self._verify_app_pr_author(packet, current)
+        if packet.get("credential_mode") == "app":
+            delivery.require(current["body"] == expected["body"], "review target PR body changed")
         return {
             "schema_version": 1,
             "action": "list_reviews",
@@ -1277,6 +1276,20 @@ class Publisher:
                          and packet["actions_deferred_head"] == pr["head_sha"],
                          "Actions deferral is for a different implementation revision")
         return {"status": "deferred", "reason": "operator_deferred", "head_sha": pr["head_sha"]}
+
+    def _existing_review_label(self, packet: dict[str, Any]) -> str:
+        label = packet.get("existing_review_label")
+        configured = packet["policy_values"].get("tracking", {}).get("review_label")
+        delivery.require(isinstance(label, str) and label and label == configured,
+                         "review label differs from policy")
+        try:
+            existing = self.client.api(
+                "GET", self.repo, f"/repos/{{owner}}/{{repo}}/labels/{quote(label, safe='')}",
+            )
+        except delivery.DeliveryError as exc:
+            raise delivery.DeliveryError(f"could not verify existing review label: {exc}") from exc
+        delivery.require(existing.get("name") == label, "review label readback differs from policy")
+        return label
 
     def _finalize(self, packet: dict[str, Any]) -> dict[str, Any]:
         expected = packet["pr"]
@@ -1305,6 +1318,7 @@ class Publisher:
         self._base_tip({"base": current["base"], "base_sha": current["base_sha"]})
         self._approval(packet, "plan_approval")
         self._approval(packet)
+        self._existing_review_label(packet)
         query = (
             "mutation($id:ID!){markPullRequestReadyForReview(input:{pullRequestId:$id})"
             "{pullRequest{id isDraft}}}"
@@ -1333,6 +1347,7 @@ class Publisher:
             delivery.require(current[field] == pr[field], f"ready PR {field} changed")
         delivery.require(current["state"] == "OPEN" and not current["draft"], "PR is not ready")
         self._verify_app_pr_author(packet, current)
+        self._verify_pr_provenance(packet, current)
         self._checkpoint_if_pending(packet, "ready", current)
         self._base_tip({"base": current["base"], "base_sha": current["base_sha"]})
         ci = self._finalization_ci(packet, current)
@@ -1345,13 +1360,7 @@ class Publisher:
             delivery.canonical_json({"title": issue.get("title", ""), "body": issue.get("body", "")})
         ).hexdigest()
         delivery.require(digest == self.issue_digest, "source issue changed during finalization")
-        label = packet["existing_review_label"]
-        configured = packet["policy_values"].get("tracking", {}).get("review_label")
-        delivery.require(label == configured and isinstance(label, str) and label,
-                         "review label differs from policy")
-        self.client.api(
-            "GET", self.repo, f"/repos/{{owner}}/{{repo}}/labels/{quote(label, safe='')}",
-        )
+        label = self._existing_review_label(packet)
         self._approval(packet, "plan_approval")
         self._approval(packet)
         current_labels = {item.get("name") for item in issue.get("labels", [])}
@@ -1390,6 +1399,7 @@ class Publisher:
         delivery.require(final_pr["state"] == "OPEN" and not final_pr["draft"],
                          "terminal PR is not open and ready")
         self._verify_app_pr_author(packet, final_pr)
+        self._verify_pr_provenance(packet, final_pr)
         terminal_ci = self._finalization_ci(packet, final_pr)
         if terminal_ci["status"] not in {"success", "deferred"}:
             suffix = "waiting" if terminal_ci["status"] == "waiting" else "blocked"

@@ -29,7 +29,7 @@ ALLOWED_PERMISSIONS = {
     "actions": {"read"},
     "checks": {"read"},
     "contents": {"write"},
-    "issues": {"read", "write"},
+    "issues": {"write"},
     "metadata": {"read"},
     "pull_requests": {"write"},
     "statuses": {"read"},
@@ -37,7 +37,7 @@ ALLOWED_PERMISSIONS = {
 REQUIRED_PERMISSIONS = {
     "actions": "read",
     "contents": "write",
-    "issues": "read",
+    "issues": "write",
     "metadata": "read",
     "pull_requests": "write",
 }
@@ -134,7 +134,6 @@ class AppBinding:
                              for name, level in permissions.items()),
                          "App binding contains unsupported permissions")
         delivery.require(all(permissions.get(name) == level
-                             or (name == "issues" and permissions.get(name) == "write")
                              for name, level in REQUIRED_PERMISSIONS.items()),
                          "App binding is missing a required permission")
         state_value = value.get("state_dir")
