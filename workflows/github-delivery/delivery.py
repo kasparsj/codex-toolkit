@@ -33,7 +33,11 @@ STATUS_VALUES = {
     "claimed", "rank_required", "plan_required", "plan_review", "implementation_required",
     "implementation_review", "publication_pending", "review_ready",
     "ci_waiting", "blocked", "completed",
+    "github_ready", "pre_ready_ci_waiting", "pre_ready_ci_blocked",
+    "post_ready_ci_waiting", "post_ready_ci_blocked", "tracking_pending",
 }
+APP_FINALIZING = frozenset({"publication_pending", "pre_ready_ci_waiting", "pre_ready_ci_blocked",
+                            "post_ready_ci_waiting", "post_ready_ci_blocked", "tracking_pending"})
 SKILLS = ("next-issue", "plan-pr", "implement-plan", "pr-closeout")
 WRITE_KINDS = ("push", "create_pr", "edit_pr", "mark_ready", "track_issue")
 FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
@@ -74,18 +78,23 @@ def atomic_json(path: Path, value: dict[str, Any]) -> None:
             os.fsync(handle.fileno())
         os.chmod(name, 0o600)
         os.replace(name, path)
+        directory_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
     finally:
         with contextlib.suppress(FileNotFoundError):
             os.unlink(name)
 
 
 @contextlib.contextmanager
-def mutex(path: Path) -> Iterator[None]:
+def mutex(path: Path) -> Iterator[int]:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
     with os.fdopen(fd, "rb") as handle:
         fcntl.flock(handle, fcntl.LOCK_EX)
-        yield
+        yield handle.fileno()
 
 
 def utc_now() -> str:
@@ -211,7 +220,7 @@ def skill_hashes(skills_root: Path) -> dict[str, str]:
 def adapter_hashes() -> dict[str, str]:
     root = Path(__file__).resolve().parent
     names = ("delivery.py", "adapter.py", "publisher_adapter.py", "publisher.py",
-             "trusted_git.py", "workflow.yaml")
+             "trusted_git.py", "workflow.yaml", "app_auth.py", "agent_isolation.py")
     return {name: digest_bytes((root / name).read_bytes()) for name in names}
 
 
@@ -284,7 +293,7 @@ def closeout_verdict(checks: list[str], *, draft: bool, merge_requested: bool = 
 
 def run_spec_kit(state: dict[str, Any], state_dir: Path, *, run_id: str | None = None,
                  plan_verdict: str = "", implementation_verdict: str = "",
-                 runner=subprocess.run) -> dict[str, Any]:
+                 runner=subprocess.run, execution_fd: int | None = None) -> dict[str, Any]:
     """Dispatch only the reviewed local YAML through the exact pinned runner."""
     workflow_dir = Path(__file__).resolve().parent
     validate_delivery_id(state["delivery_id"])
@@ -332,12 +341,21 @@ def run_spec_kit(state: dict[str, Any], state_dir: Path, *, run_id: str | None =
                            ("run_implementation", str("implement" not in manifests).lower()),
                            ("publish_implementation", str("implementation" not in publication).lower()),
                            ("finalize", str("final" not in publication).lower()),
+                           ("agent_closeout", str(state.get("credential_mode") != "app").lower()),
                            ("plan_gate", str(plan_gate).lower()),
                            ("implementation_gate", str(implementation_gate).lower())):
             argv += ["--input", f"{key}={value}"]
     if plan_verdict: argv += ["--input", f"plan_verdict={plan_verdict}"]
     if implementation_verdict: argv += ["--input", f"implementation_verdict={implementation_verdict}"]
-    completed = runner(argv, cwd=runner_dir, text=True, capture_output=True, check=False)
+    extra = {}
+    if state.get("credential_mode") == "app":
+        require(execution_fd is not None, "App runner requires the repository execution lock")
+        argv = [sys.executable, __file__, "_hold-lock", str(execution_fd), *argv]
+        env = {key: os.environ[key] for key in ("PATH", "HOME", "LANG", "LC_ALL",
+                                               "DELIVERY_PUBLISHER_FAULT_AFTER") if key in os.environ}
+        env["DELIVERY_RUNNER_LEASE"] = state["runner_lease"]
+        extra = {"env": env, "pass_fds": (execution_fd,)}
+    completed = runner(argv, cwd=runner_dir, text=True, capture_output=True, check=False, **extra)
     try: result = json.loads(completed.stdout)
     except json.JSONDecodeError as exc: raise DeliveryError("pinned Spec Kit emitted invalid JSON") from exc
     require(result.get("workflow_id") == "github-delivery", "unexpected runner workflow identity")
@@ -349,12 +367,15 @@ def run_spec_kit(state: dict[str, Any], state_dir: Path, *, run_id: str | None =
 
 def evaluate_reviews(reviews: list[dict[str, Any]], *, stage: str, generation: int,
                      context_digest: str, commit_id: str, authorized_ids: list[int],
-                     publisher_id: int, minimum: int) -> dict[str, Any]:
+                     publisher_id: int, minimum: int, require_human: bool = False) -> dict[str, Any]:
     expected = {review_body(stage, generation, context_digest, d): d for d in ("approve", "reject")}
     latest: dict[int, tuple[str, int, str]] = {}
     for review in reviews:
-        rid = review.get("user", {}).get("id")
+        user = review.get("user") or {}
+        rid = user.get("id")
         if rid not in authorized_ids or rid == publisher_id:
+            continue
+        if require_human and (user.get("type") != "User" or review.get("performed_via_github_app") is not None):
             continue
         if review.get("state") != "COMMENTED" or review.get("dismissed") is True:
             continue
@@ -370,8 +391,11 @@ def evaluate_reviews(reviews: list[dict[str, Any]], *, stage: str, generation: i
     decisions = {rid: value[2] for rid, value in latest.items()}
     rejects = sorted(rid for rid, decision in decisions.items() if decision == "reject")
     approvals = sorted(rid for rid, decision in decisions.items() if decision == "approve")
-    return {"approved": not rejects and len(approvals) >= minimum, "approvers": approvals,
-            "rejectors": rejects, "minimum": minimum}
+    verdict = {"approved": not rejects and len(approvals) >= minimum, "approvers": approvals,
+               "rejectors": rejects, "minimum": minimum}
+    if require_human:
+        verdict["review_ids"] = {str(rid): value[1] for rid, value in latest.items()}
+    return verdict
 
 
 class Coordinator:
@@ -387,7 +411,7 @@ class Coordinator:
 
     def start(self, *, repo: str, issue: int | None, policy: dict[str, Any],
               skills_root: Path, delivery_id: str | None = None, agent: dict[str, str] | None = None,
-              publisher_launcher: str | None = None) -> dict[str, Any]:
+              publisher_launcher: str | None = None, app: dict[str, Any] | None = None) -> dict[str, Any]:
         validate_repo(repo)
         repo_dir = self._repo_dir(repo)
         with mutex(repo_dir / "claim.lock"):
@@ -412,6 +436,8 @@ class Coordinator:
                      "status": "plan_required" if issue is not None else "rank_required"}
             if agent is not None:
                 state.update(agent=agent, publisher_launcher=publisher_launcher)
+            if app is not None:
+                state.update(credential_mode="app", app=app)
             atomic_json(self._delivery_path(repo, stable), state)
             atomic_json(active_path, claim)  # durable, loadable claim precedes candidate selection
             return state
@@ -421,6 +447,17 @@ class Coordinator:
 
     def save(self, state: dict[str, Any]) -> None:
         atomic_json(self._delivery_path(state["repo"], state["delivery_id"]), state)
+
+    @contextlib.contextmanager
+    def runner_step(self, state: dict[str, Any]) -> Iterator[dict[str, Any]]:
+        if state.get("credential_mode") != "app":
+            yield state
+            return
+        with mutex(self._repo_dir(state["repo"]) / "step.lock"):
+            state = self.load(state["repo"], state["delivery_id"])
+            require_runner_lease(state)
+            app_claim(self, state)
+            yield state
 
     def release(self, state: dict[str, Any]) -> None:
         repo_dir = self._repo_dir(state["repo"])
@@ -438,6 +475,10 @@ class Coordinator:
 
     def accept_manifest(self, state: dict[str, Any], manifest: dict[str, Any]) -> dict[str, Any]:
         kind = manifest.get("kind")
+        if state.get("credential_mode") == "app":
+            require(kind in ("plan", "implement"), "App delivery only accepts plan and implementation manifests")
+            expected_status = {"plan": "plan_required", "implement": "implementation_required"}
+            require(state["status"] == expected_status[kind], "App manifest is out of order")
         require(kind in ("rank", "plan", "implement", "closeout"), "unsupported manifest kind")
         validate_manifest(manifest, kind)
         require(manifest["delivery_id"] == state["delivery_id"], "manifest delivery mismatch")
@@ -543,11 +584,15 @@ class Coordinator:
                     "correction requires the owned draft at the current published revision")
             state.setdefault("corrections", {})[kind] = state["publication"].pop(stage)
         state["receipts"].pop(stage, None)
+        if stage == "implementation":
+            state.pop("actions_deferred_head", None)
         state["attempt"] += 1
         state["runner_status"] = "idle"
         state["runner_pid"] = None
         state["history"].append({"event": f"{stage}_correction", "previous_run_id": state["runner_run_id"],
                                  "attempt": state["attempt"], "at": utc_now()})
+        if state.get("credential_mode") == "app":
+            state["status"] = f"{stage}_required"
         return self.accept_manifest(state, manifest)
 
     def recover(self, state: dict[str, Any], *, old_pid_alive: bool) -> dict[str, Any]:
@@ -597,7 +642,9 @@ def parser() -> argparse.ArgumentParser:
     start.add_argument("--policy-fetched-at", required=True); start.add_argument("--skills-root", type=Path, required=True)
     start.add_argument("--no-dispatch", action="store_true", help=argparse.SUPPRESS)
     start.add_argument("--agent-launcher", type=Path, required=True)
-    start.add_argument("--publisher-launcher", type=Path, required=True)
+    start.add_argument("--publisher-launcher", type=Path)
+    start.add_argument("--app-config", type=Path)
+    start.add_argument("--container-image")
     start.add_argument("--worktree", type=Path, required=True); start.add_argument("--agent-scratch", type=Path, required=True)
     for name in ("status", "resume", "recover", "advance"):
         cmd = sub.add_parser(name); cmd.add_argument("--state-dir", type=Path, required=True)
@@ -605,6 +652,7 @@ def parser() -> argparse.ArgumentParser:
         if name in ("resume", "recover"): cmd.add_argument("--skills-root", type=Path, required=True)
         if name == "resume":
             cmd.add_argument("--result", type=Path)
+            cmd.add_argument("--defer-actions-verification", action="store_true")
         if name == "advance": cmd.add_argument("--stage", choices=("plan", "implementation"), required=True)
     return result
 
@@ -629,6 +677,181 @@ def run_successor(coordinator: Coordinator, state: dict[str, Any]) -> dict[str, 
     return state
 
 
+def require_runner_lease(state: dict[str, Any]) -> None:
+    if state.get("credential_mode") == "app":
+        require(state["runner_status"] == "running" and bool(state.get("runner_lease"))
+                and state["runner_lease"] == os.environ.get("DELIVERY_RUNNER_LEASE"),
+                "App workflow step requires the active repository execution lease")
+
+
+def app_preflight(state: dict[str, Any], *, initial: bool = False) -> None:
+    import agent_isolation
+    import publisher_adapter
+
+    packet = {**publisher_adapter.packet_for(state, "preflight"), "initial": initial}
+    response = publisher_adapter.call_launcher(Path(state["publisher_launcher"]), packet, app=state["app"])
+    identity = response.get("identity", {})
+    require(identity.get("repository_id") == state["app"]["repository_id"],
+            "App preflight repository ID mismatch")
+    state["app"]["identity"] = identity
+    snapshot = response.get("snapshot")
+    require(isinstance(snapshot, dict), "trusted GitHub read snapshot missing")
+    agent = state["agent"]
+    atomic_json(Path(agent["read_snapshot"]), snapshot)
+    agent_isolation.preflight(state=state, launcher=Path(agent["launcher"]), worktree=Path(agent["worktree"]),
+                              scratch=Path(agent["scratch"]), skills_root=Path(agent["skills_root"]))
+
+
+def app_view(coordinator: Coordinator, state: dict[str, Any]) -> dict[str, Any]:
+    import publisher_adapter
+
+    value = {key: state.get(key) for key in ("repo", "issue", "delivery_id", "status", "attempt",
+                                             "runner_status", "runner_run_id", "policy")}
+    value["identity"] = state["app"].get("identity")
+    value["receipts"] = state["receipts"]
+    active = read_json(coordinator._repo_dir(state["repo"]) / "active.json")
+    value["claim_status"] = active["status"] if active.get("delivery_id") == state["delivery_id"] else "other_delivery"
+    progress = state.get("publication", {})
+    latest = next((progress[key] for key in ("final", "progress", "implementation", "plan")
+                   if key in progress), {})
+    if pr := latest.get("pr"):
+        value["pr"] = {key: pr.get(key) for key in ("number", "node_id", "head", "head_sha", "base",
+                                                    "base_sha", "draft", "state", "author_id")}
+        value["pr"]["url"] = f"https://{repo_identity(state['repo'])}/pull/{pr['number']}"
+        value["ci"] = latest.get("ci")
+        value["tracking"] = latest.get("issue")
+    if state["runner_status"] == "failed":
+        value["runner_failure"] = state.get("runner", {}).get("error")
+    for stage in ("plan", "implementation"):
+        if state["status"] != f"{stage}_review" or stage not in state.get("publication", {}):
+            continue
+        request = publisher_adapter.approval_request(state, stage)
+        pr = request["pr"]
+        value["human_review"] = {
+            "url": f"https://{repo_identity(state['repo'])}/pull/{pr['number']}/files",
+            "head_sha": pr["head_sha"], "reviewer_ids": request["reviewer_ids"],
+            "submit_as": "COMMENT", "stage": stage,
+            **{decision: review_body(stage, request["generation"], request["context_digest"], decision)
+               for decision in ("approve", "reject")},
+        }
+    return value
+
+
+def run_app(coordinator: Coordinator, state: dict[str, Any], execution_fd: int, *,
+            run_id: str | None = None, stage: str | None = None, verdict: str = "") -> dict[str, Any]:
+    state.update(runner_status="running", runner_pid=os.getpid(), runner_lease=secrets.token_hex(16))
+    coordinator.save(state)
+    result = run_spec_kit(state, coordinator.root, execution_fd=execution_fd, run_id=run_id,
+                          plan_verdict=verdict if stage == "plan" else "",
+                          implementation_verdict=verdict if stage == "implementation" else "")
+    state = coordinator.load(state["repo"], state["delivery_id"])
+    state.update(runner=result, runner_status=result["status"], runner_pid=None,
+                 runner_run_id=result["run_id"])
+    state.pop("runner_lease", None)
+    coordinator.save(state)
+    if state["status"] == "review_ready":
+        coordinator.release(state)
+    return state
+
+
+def app_claim(coordinator: Coordinator, state: dict[str, Any]) -> None:
+    active = read_json(coordinator._repo_dir(state["repo"]) / "active.json")
+    require(active.get("delivery_id") == state["delivery_id"] and active.get("status") == "active",
+            "App dispatch requires the current active delivery claim")
+
+
+def start_app(coordinator: Coordinator, args, policy: dict[str, Any], agent: dict[str, str]) -> dict[str, Any]:
+    from app_auth import AppBinding
+
+    require(args.issue is not None and args.issue > 0, "App M1 requires one explicit issue")
+    require(not args.no_dispatch, "App M1 starts through the pinned runner")
+    launcher = Path(__file__).resolve().with_name("publisher.py")
+    require(args.publisher_launcher is None or args.publisher_launcher.resolve() == launcher,
+            "App mode requires the bundled deterministic publisher")
+    binding = AppBinding.load(args.app_config)
+    require(coordinator.root == binding.state_dir, "App state directory differs from protected binding")
+    repo_dir = coordinator._repo_dir(args.repo)
+    stable = args.delivery_id or secrets.token_hex(12)
+    validate_delivery_id(stable)
+    agent.update(isolation_profile="container", container_image=args.container_image,
+                 read_snapshot=str(coordinator._delivery_path(args.repo, stable).with_name("github-read-snapshot.json")))
+    app = {"config": str(args.app_config.absolute()), "digest": binding.digest,
+           "publisher_root": str(repo_dir / "publisher"),
+           "repository_id": binding.repository_id, "repository_full_name": binding.repository,
+           "private_key_path": str(binding.private_key_path)}
+    with mutex(repo_dir / "execution.lock") as execution_fd:
+        active_path = repo_dir / "active.json"
+        if active_path.exists():
+            require(read_json(active_path).get("status") in ("completed", "released"),
+                    "active delivery already claimed")
+        require(not coordinator._delivery_path(args.repo, stable).exists(), "delivery ID already exists")
+        Path(app["publisher_root"]).mkdir(mode=0o700, parents=True, exist_ok=True)
+        pending = {"credential_mode": "app", "app": app, "repo": args.repo, "delivery_id": stable,
+                   "issue": args.issue, "policy": policy["_source"], "policy_values": policy,
+                   "agent": agent, "publisher_launcher": str(launcher)}
+        app_preflight(pending, initial=True)
+        state = coordinator.start(repo=args.repo, issue=args.issue, policy=policy, skills_root=args.skills_root,
+                                  delivery_id=stable, agent=agent, publisher_launcher=str(launcher), app=app)
+        return run_app(coordinator, state, execution_fd)
+
+
+def resume_app(coordinator: Coordinator, args) -> dict[str, Any]:
+    import publisher_adapter
+
+    with mutex(coordinator._repo_dir(args.repo) / "execution.lock") as execution_fd:
+        with mutex(coordinator._repo_dir(args.repo) / "step.lock"):
+            state = coordinator.load(args.repo, args.delivery_id)
+            coordinator.verify_resume(state, args.skills_root)
+            if state["status"] == "review_ready":
+                coordinator.release(state)
+                return state
+            app_claim(coordinator, state)
+            defer_actions = getattr(args, "defer_actions_verification", False)
+            if defer_actions:
+                require(state["status"] == "implementation_review" and state["runner_status"] == "paused"
+                        and not getattr(args, "result", None),
+                        "Actions deferral requires a paused implementation review without a correction")
+            recovering = args.command == "recover"
+            if recovering:
+                require(state["runner_status"] == "running", "recover requires stranded running state")
+                pid = state.get("runner_pid")
+                require(not pid or not _pid_alive(pid), "old runner process is still alive")
+            else:
+                require(state["runner_status"] != "running", "interrupted App runner requires recover")
+            app_preflight(state)
+            if recovering:
+                state.pop("runner_lease", None)
+                state = coordinator.recover(state, old_pid_alive=False)
+        if getattr(args, "result", None):
+            state = coordinator.accept_correction(state, read_json(args.result))
+        if state["status"] in APP_FINALIZING:
+            state = publisher_adapter.finalize(state, Path(state["publisher_launcher"]), coordinator.save)
+            state.update(runner_status="completed", runner_pid=None)
+            state.pop("runner_lease", None)
+            coordinator.save(state)
+            if state["status"] == "review_ready":
+                coordinator.release(state)
+            return state
+        if state["runner_status"] == "paused":
+            stage = {"plan-review": "plan", "implementation-review": "implementation"}.get(
+                state.get("runner", {}).get("current_step_id"))
+            require(stage is not None, "unknown App approval gate")
+            state, verdict = publisher_adapter.check_approval(state, Path(state["publisher_launcher"]), stage)
+            coordinator.save(state)
+            if verdict != "approve":
+                return state
+            if defer_actions:
+                require(stage == "implementation", "Actions deferral requires implementation approval")
+                head = state["publication"]["implementation"]["pr"]["head_sha"]
+                state["actions_deferred_head"] = head
+                state["history"].append({"event": "actions_verification_deferred", "head_sha": head,
+                                         "at": utc_now()})
+                coordinator.save(state)
+            return run_app(coordinator, state, execution_fd, run_id=state["runner_run_id"],
+                           stage=stage, verdict=verdict)
+        return run_app(coordinator, state, execution_fd)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     try:
@@ -636,17 +859,28 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "start":
             policy = load_policy(args.policy, expected_digest=args.policy_digest,
                 source_ref=args.policy_ref, source_sha=args.policy_sha, fetched_at=args.policy_fetched_at)
+            agent = {"launcher": str(args.agent_launcher.resolve()),
+                     "worktree": str(args.worktree.resolve()), "scratch": str(args.agent_scratch.resolve()),
+                     "skills_root": str(args.skills_root.resolve())}
+            if args.app_config is not None:
+                value = start_app(coordinator, args, policy, agent)
+                print(json.dumps(app_view(coordinator, value), sort_keys=True))
+                return 0
+            require(args.publisher_launcher is not None, "user-token mode requires a publisher launcher")
             value = coordinator.start(repo=args.repo, issue=args.issue, policy=policy,
                 skills_root=args.skills_root, delivery_id=args.delivery_id,
-                agent={"launcher": str(args.agent_launcher.resolve()),
-                              "worktree": str(args.worktree.resolve()),
-                              "scratch": str(args.agent_scratch.resolve()),
-                              "skills_root": str(args.skills_root.resolve())},
+                agent=agent,
                 publisher_launcher=str(args.publisher_launcher.resolve()))
             if not args.no_dispatch:
                 value = run_successor(coordinator, value)
         else:
             value = coordinator.load(args.repo, args.delivery_id)
+            if value.get("credential_mode") == "app" and args.command in ("resume", "recover", "status"):
+                if args.command != "status":
+                    value = resume_app(coordinator, args)
+                print(json.dumps(app_view(coordinator, value), sort_keys=True))
+                return 0
+            require(not getattr(args, "defer_actions_verification", False), "Actions deferral requires App mode")
             if args.command == "resume":
                 coordinator.verify_resume(value, args.skills_root)
                 if args.result:
@@ -689,12 +923,19 @@ def main(argv: list[str] | None = None) -> int:
                 value = coordinator.recover(value, old_pid_alive=alive)
                 value = run_successor(coordinator, value)
             elif args.command == "advance":
-                expected = "plan_review" if args.stage == "plan" else "implementation_review"
-                target = "implementation_required" if args.stage == "plan" else "publication_pending"
-                require(value["status"] == expected, f"cannot advance {args.stage} from {value['status']}")
-                value["status"] = target
-                value["history"].append({"event": f"{args.stage}_runner_gate_completed", "at": utc_now()})
-                coordinator.save(value)
+                with coordinator.runner_step(value) as value:
+                    expected = "plan_review" if args.stage == "plan" else "implementation_review"
+                    target = "implementation_required" if args.stage == "plan" else "publication_pending"
+                    require(value["status"] == expected, f"cannot advance {args.stage} from {value['status']}")
+                    if value.get("credential_mode") == "app":
+                        import publisher_adapter
+
+                        value, verdict = publisher_adapter.check_approval(
+                            value, Path(value["publisher_launcher"]), args.stage)
+                        require(verdict == "approve", f"current {args.stage} approval is required")
+                    value["status"] = target
+                    value["history"].append({"event": f"{args.stage}_runner_gate_completed", "at": utc_now()})
+                    coordinator.save(value)
         print(json.dumps(value, sort_keys=True))
         return 0
     except (DeliveryError, OSError) as exc:
@@ -710,4 +951,8 @@ def _pid_alive(pid: int) -> bool:
 
 
 if __name__ == "__main__":
+    if sys.argv[1:2] == ["_hold-lock"]:
+        # A surviving runner retains the open lock description if its coordinator dies.
+        os.fstat(int(sys.argv[2]))
+        raise SystemExit(subprocess.call(sys.argv[3:]))
     raise SystemExit(main())

@@ -249,3 +249,119 @@ The test suite covers all gate modes, stale policy, changed head/base, rejection
 semantics, ambiguous create recovery, concurrent claim, stacked refs, closeout
 waiting/failure with no merge, manifest/privilege validation, correction
 generations, skill pinning, and existing-label enforcement.
+
+## M1 GitHub App mode
+
+App mode uses the bundled publisher and one protected state directory on one
+operator-controlled host. The user-token launcher remains available through
+`--publisher-launcher`. For the M1 fixture use `--app-config` and an explicit
+issue number.
+
+Prepare a private GitHub.com repository with `main` as the default branch, one unlabeled
+open issue, an existing tracking label, and an Actions workflow on `main` that
+runs for draft `pull_request` events on open and synchronize. Audit the
+workflow and any other workflow triggered by delivery branch or PR updates.
+Use GitHub-hosted runners, read-only checkout credentials, a pinned checkout
+action with credential persistence disabled, and a harmless fixture job with
+no secrets, deployments, or `pull_request_target`. Keep the default branch
+fixed once the policy is in place.
+
+Default-branch protection is optional for every repository. App preflight
+records the protection status reported by GitHub. The runner still pins the
+base SHA, stops on base drift, and confines App pushes to the delivery branch.
+Without GitHub branch protection, other writers can push directly to `main`.
+
+Register a separate private GitHub App for the fixture, generate a key, and
+install it only on the selected repository. Grant repository permissions
+Metadata read, Contents write, Pull requests write, Issues write, and Actions
+read. If branch protection is enabled, leave the App out of its bypass list. Resolve the numeric bot
+account using the verified App slug and resolve each reviewer to a GitHub
+`User` account. Store the key and binding in owner-only files outside all
+agent mounts. Create the bound state directory with mode `0700`.
+
+The protected binding is JSON. Replace the sample IDs, paths and workflow
+settings with values from the fixture.
+
+```json
+{
+  "schema_version": 1,
+  "host": "github.com",
+  "app": {"id": 100, "client_id": "Iv1.example", "slug": "fixture-delivery", "bot_user_id": 101},
+  "installation": {"id": 102, "account_id": 103},
+  "repository": {"id": 104, "full_name": "OWNER/FIXTURE"},
+  "permissions": {
+    "metadata": "read", "contents": "write", "pull_requests": "write",
+    "issues": "write", "actions": "read"
+  },
+  "private_key_path": "/operator/private/fixture-app.pem",
+  "state_dir": "/operator/private/fixture-state",
+  "allowed_path_prefixes": ["docs/"],
+  "ci": {
+    "workflow_id": 105,
+    "workflow_path": ".github/workflows/delivery-fixture.yml",
+    "workflow_sha256": "516af51deca439b5d3452bc4b6c49f7df25098068ad24abfdb41a1198c820432",
+    "event": "pull_request",
+    "required_job": "verify-fixture"
+  }
+}
+```
+
+Commit `.github/delivery.toml` during fixture setup. The publisher ID is the
+bot user ID. Set both approval minimums to one with the intended human IDs,
+use `required_labels = []`, set `default_parent` and `final_target` to
+`main`, use the same branch template for both stages (for example,
+`codex/issue-{issue}`), and map `tracking.review_label` to the existing label.
+Fetch the policy from the resulting immutable commit. Record the SHA of
+`refs/heads/main`, the SHA-256 of the policy bytes, and the fetch timestamp.
+
+Prepare a self-contained dedicated checkout at that commit and set
+`git config --local delivery.agentCheckout true`. Remove credential-bearing
+remotes and local credential helpers. Supply a locally available image pinned
+by registry digest and an operator-controlled agent launcher compatible with
+that image. The agent runs in a network-disabled Docker container with its
+own writable checkout and output directory. The launcher needs an in-container
+agent runtime capable of operating offline. It reads the adapter JSON packet
+on stdin, reads private issue and PR data from its mounted snapshot, and
+returns the requested manifest and candidate bundle. Git source is available
+in the checkout. The publisher refreshes the repository-scoped read snapshot
+on start and resume. The protected config, private key, trusted Git workspace,
+Docker socket, and host home stay outside the container.
+Export full candidate bundles so the implementation can extend the exact
+reviewed plan commit while keeping the default-branch base pinned.
+
+```bash
+python3 workflows/github-delivery/delivery.py start \
+  --repo OWNER/FIXTURE --issue 1 --delivery-id m1-fixture \
+  --app-config /operator/private/app.json --state-dir /operator/private/fixture-state \
+  --policy /operator/private/delivery.toml --policy-ref refs/heads/main \
+  --policy-sha "$FIXTURE_SHA" --policy-digest "$POLICY_DIGEST" \
+  --policy-fetched-at "$POLICY_FETCHED_AT" --skills-root "$TOOLKIT/skills" \
+  --agent-launcher /operator/fixture-agent --container-image "$AGENT_IMAGE_DIGEST" \
+  --worktree /operator/agent-checkout --agent-scratch /operator/agent-output
+```
+
+Use `status`, `resume`, and `recover` with the same state directory,
+repository and delivery ID. Pass the same `--skills-root` on resume and
+recover. At either gate, `status` supplies a review URL, exact head SHA, and
+the exact body for a submitted **Comment** review. The implementation review
+must be on the new head of the same draft. Resume checks submitted reviews
+and the current GitHub state. Use `recover` when the previous coordinator
+died and left the runner marked running. If the protected policy or default
+branch has moved, preserve the claim and reconcile the delivery before
+replanning against the new base.
+
+For the disposable recovery trial, run start or resume with
+`DELIVERY_PUBLISHER_FAULT_AFTER` set to one of `push`, `pr_create`,
+`pr_update`, `ready`, or `label`. The publisher simulates losing the
+response once for the selected write after acceptance and before its
+checkpoint. Clear the variable and resume the same delivery ID. Compare the
+journal and GitHub ref, PR, and issue state before and after each retry.
+Review-ready requires the final open PR, trusted CI on its exact revision,
+and the existing issue label to be read back. Claim release follows the
+durable terminal checkpoint.
+
+For an explicitly authorized fixture trial, pass
+`resume --defer-actions-verification` at the paused implementation review.
+The runner records the deferral only after verifying the submitted approval
+and binds it to that exact head. The terminal record reports CI as deferred
+and still requires the ready PR and issue label to be read back.

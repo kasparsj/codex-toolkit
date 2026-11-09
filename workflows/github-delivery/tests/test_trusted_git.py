@@ -68,6 +68,28 @@ class TrustedGitTest(unittest.TestCase):
             self.assertTrue(runtime.is_dir())
         self.assertFalse(runtime.exists())
 
+    def test_app_checks_intermediate_changes_even_if_reverted_in_final_tree(self):
+        workflow = ".github/workflows/temporary.yml"
+        (self.source / workflow).parent.mkdir(parents=True)
+        (self.source / workflow).write_text("temporary workflow\n")
+        git(self.source, "add", workflow)
+        git(self.source, "commit", "-qm", "add temporary workflow")
+        git(self.source, "rm", workflow)
+        git(self.source, "commit", "-qm", "remove temporary workflow")
+        candidate = git(self.source, "rev-parse", "HEAD")
+        git(self.source, "branch", "-f", "delivery-candidate", candidate)
+        bundle = self.root / "transient.bundle"
+        git(self.source, "bundle", "create", str(bundle), "refs/heads/delivery-candidate")
+
+        def allow_docs(paths):
+            if any(not path.startswith("docs/") for path in paths):
+                raise trusted_git.delivery.DeliveryError("path outside fixture allowlist")
+
+        with self.open_git() as repository:
+            repository.import_candidate(bundle, candidate, self.base, ["docs/plan.md"], None)
+            with self.assertRaisesRegex(trusted_git.delivery.DeliveryError, "outside fixture allowlist"):
+                repository.verify_introduced_paths(self.base, allow_paths=allow_docs)
+
     def test_fetches_base_before_importing_incremental_bundle(self):
         incremental = self.root / "incremental.bundle"
         git(self.source, "bundle", "create", str(incremental),
@@ -184,6 +206,17 @@ class TrustedGitTest(unittest.TestCase):
         environment = invoked.call_args.kwargs["env"]
         self.assertEqual(command, ["gh", "auth", "token", "--hostname", "github.com"])
         self.assertEqual(environment["HOME"], "/trusted/home")
+
+    def test_app_mode_requires_explicit_token_and_never_reads_ambient_auth(self):
+        repository = trusted_git.TrustedGit(
+            self.trusted, "https://github.com/acme/widget.git",
+            auth_env={"PATH": os.environ["PATH"], "HOME": "/trusted/home"},
+            require_explicit_token=True,
+        )
+        with mock.patch.object(trusted_git.subprocess, "run") as invoked, \
+                self.assertRaisesRegex(Exception, "explicit GitHub token"):
+            repository._resolve_token()
+        invoked.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -26,10 +26,12 @@ class TrustedGit:
     """A disposable bare repository isolated from agent-controlled Git state."""
 
     def __init__(self, root: Path, canonical_url: str,
-                 auth_env: dict[str, str] | None = None):
+                 auth_env: dict[str, str] | None = None,
+                 require_explicit_token: bool = False):
         self.root = root.resolve()
         self.canonical_url = self._validate_canonical_url(canonical_url)
         self._auth_env = dict(auth_env) if auth_env is not None else None
+        self._require_explicit_token = require_explicit_token
         self._token: str | None = None
         self.repo: Path | None = None
         self._runtime: Path | None = None
@@ -133,6 +135,26 @@ class TrustedGit:
         delivery.require(self._rev_parse("refs/delivery/base^{commit}") == expected_sha,
                          "fetched base SHA mismatch")
 
+    def verify_introduced_paths(self, previous: str, *, allow_paths) -> None:
+        """Inspect each new App commit, including changes reverted by its final tree."""
+        self._require_open()
+        self._require_sha(previous, "previous revision")
+        delivery.require(self.candidate_sha is not None, "candidate has not been imported")
+        ancestor = self._git("merge-base", "--is-ancestor", previous, self.candidate_sha, check=False)
+        delivery.require(ancestor.returncode == 0, "candidate does not extend the verified revision")
+        history = self._git("rev-list", "--parents", f"{previous}..{self.candidate_sha}").stdout
+        for entry in history.splitlines():
+            revision = entry.split()
+            delivery.require(len(revision) == 2, "App candidate history must be linear")
+            commit, parent = revision
+            paths = self._diff_paths(parent, commit)
+            if paths:
+                allow_paths(self._validate_paths(paths))
+            for path in paths:
+                entry = self._tree_entry(commit, path)
+                delivery.require(entry is None or (entry[0] in ("100644", "100755") and entry[1] == "blob"),
+                                 f"App commit uses an unsupported Git object at {path}")
+
     def remote_head(self, branch: str) -> str | None:
         self._require_open()
         ref = self._branch_ref(branch)
@@ -146,7 +168,7 @@ class TrustedGit:
                          "remote returned an invalid branch head")
         return fields[0]
 
-    def push(self, branch: str, sha: str, previous: str | None) -> None:
+    def push(self, branch: str, sha: str, previous: str | None, *, lock_fd: int | None = None) -> None:
         self._require_open()
         self._require_sha(sha, "candidate")
         delivery.require(sha == self.candidate_sha, "push SHA is not the imported candidate")
@@ -164,8 +186,9 @@ class TrustedGit:
             delivery.require(ancestor.returncode == 0,
                              "candidate is not a fast-forward of the previous remote head")
         expected = previous or ""
+        options = {} if lock_fd is None else {"lock_fd": lock_fd}
         self._git("push", "--porcelain", f"--force-with-lease={ref}:{expected}",
-                  "origin", f"{sha}:{ref}")
+                  "origin", f"{sha}:{ref}", **options)
         delivery.require(self.remote_head(branch) == sha, "remote branch readback mismatch")
 
     def require_material_change(self, previous: str) -> None:
@@ -248,21 +271,29 @@ class TrustedGit:
         return self._git("cat-file", "-e", revision, check=False).returncode == 0
 
     def _git(self, *args: str, use_repo: bool = True, allow_file: bool = False,
-             check: bool = True, text: bool = True) -> subprocess.CompletedProcess:
+             check: bool = True, text: bool = True, lock_fd: int | None = None) -> subprocess.CompletedProcess:
         if use_repo:
             self._require_open()
         argv = ["git", "--no-optional-locks"]
         if use_repo:
             argv += ["--git-dir", str(self.repo)]
-        argv += ["-c", "core.hooksPath=/dev/null", "-c", "credential.helper=!gh auth git-credential"]
+        credential_helper = (
+            "!f() { test \"$1\" = get && printf '%s\\n' "
+            "'username=x-access-token' \"password=$GH_TOKEN\"; }; f"
+        )
+        argv += ["-c", "core.hooksPath=/dev/null", "-c", "credential.helper=",
+                 "-c", f"credential.helper={credential_helper}"]
         argv += ["-c", f"protocol.file.allow={'always' if allow_file else 'never'}"]
         argv += ["-c", "protocol.allow=never", "-c", "protocol.https.allow=always",
                  "-c", "http.followRedirects=false", *args]
         network = args[0] in {"ls-remote", "fetch", "push"} and not allow_file
         completed = subprocess.run(argv, cwd=self._runtime,
                                    env=self._environment(include_token=network), capture_output=True,
-                                   text=text, check=False)
+                                   text=text, check=False,
+                                   pass_fds=() if lock_fd is None else (lock_fd,))
         if check and completed.returncode:
+            if self._require_explicit_token and network:
+                raise delivery.DeliveryError(f"trusted Git network operation failed ({args[0]})")
             stderr = completed.stderr.strip() if text else completed.stderr.decode(errors="replace").strip()
             raise delivery.DeliveryError(f"trusted Git command failed ({args[0]}): {stderr}")
         return completed
@@ -286,7 +317,11 @@ class TrustedGit:
         source = self._auth_env if self._auth_env is not None else os.environ
         token = source.get("GH_TOKEN") or source.get("GITHUB_TOKEN")
         if token:
+            delivery.require("\n" not in token and "\r" not in token,
+                             "authentication token contains a newline")
             return token
+        delivery.require(not self._require_explicit_token,
+                         "explicit GitHub token is required for App mode")
         environment = {name: source[name] for name in
                        ("PATH", "HOME", "GH_CONFIG_DIR", "XDG_CONFIG_HOME") if source.get(name)}
         environment["GH_HOST"] = "github.com"
