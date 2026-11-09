@@ -1161,6 +1161,9 @@ class Publisher:
             return {"schema_version": 1, "action": packet["action"], "pr": match}
 
         body = self._pr_body(packet)
+        issue = expected["issue"]
+        title = (f"docs: plan issue #{issue}" if packet["action"] == "publish_plan"
+                 else f"chore: implement issue #{issue}")
         if verified_superseded is not None:
             current_pr = self._verified_superseded(packet)
             delivery.require(
@@ -1179,8 +1182,7 @@ class Publisher:
                 "PATCH",
                 self.repo,
                 f"/repos/{{owner}}/{{repo}}/pulls/{current_pr['number']}",
-                {"title": ("Plan" if packet["action"] == "publish_plan" else "Implement")
-                 + f" issue #{expected['issue']}", "body": body, "base": expected["base"]},
+                {"title": title, "body": body, "base": expected["base"]},
             )
             operation = "pr_update"
         elif (
@@ -1208,8 +1210,7 @@ class Publisher:
                 "PATCH",
                 self.repo,
                 f"/repos/{{owner}}/{{repo}}/pulls/{current_pr['number']}",
-                {"title": f"Implement issue #{expected['issue']}", "body": body,
-                 "base": expected["base"]},
+                {"title": title, "body": body, "base": expected["base"]},
             )
             operation = "pr_update"
         else:
@@ -1226,8 +1227,7 @@ class Publisher:
                 self.repo,
                 "/repos/{owner}/{repo}/pulls",
                 {
-                    "title": ("Plan" if packet["action"] == "publish_plan" else "Implement")
-                    + f" issue #{expected['issue']}",
+                    "title": title,
                     "body": body,
                     "head": expected["head"],
                     "base": expected["base"],

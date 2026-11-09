@@ -76,12 +76,12 @@ class FakeClient:
                 self.base_sha,
                 payload["body"],
             )
-            self.prs[number] = raw
+            self.prs[number] = {**raw, "title": payload["title"]}
             self.mutations.append(("create", number))
             return raw
         if "/pulls/" in endpoint and method == "PATCH":
             number = int(endpoint.rsplit("/", 1)[1])
-            self.prs[number].update({key: value for key, value in payload.items() if key in ("body",)})
+            self.prs[number].update({key: payload[key] for key in ("body", "title")})
             self.mutations.append(("edit", number))
             return self.prs[number]
         if "/labels/" in endpoint and method == "GET":
@@ -227,6 +227,7 @@ class LivePublisherTest(unittest.TestCase):
         self.assertTrue(result["pr"]["draft"])
         self.assertEqual(self.client.remote_heads["codex/plan-42"], "c" * 40)
         self.assertEqual(self.client.mutations, [("create", 1)])
+        self.assertEqual(self.client.prs[1]["title"], "docs: plan issue #42")
         self.assertIn("Issue: https://github.com/acme/widget/issues/42", result["pr"]["body"])
         self.assertIn(f"issue-digest: {self.issue_digest}", result["pr"]["body"])
 
@@ -401,6 +402,7 @@ class LivePublisherTest(unittest.TestCase):
         self.assertEqual(result["pr"]["head_sha"], expected["head_sha"])
         self.assertIn(f"manifest-digest: {expected['manifest_digest']}", result["pr"]["body"])
         self.assertEqual(self.client.mutations, [("edit", 12)])
+        self.assertEqual(self.client.prs[12]["title"], "docs: plan issue #42")
         self.assertEqual(len(self.client.prs), 1)
         self.assertEqual(self.client.reviews, {})
 
