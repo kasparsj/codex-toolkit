@@ -73,6 +73,28 @@ repository/ref/full SHA, the immediate publication repository/ref/tip (and
 parent PR for a stack), and the final target repository/ref. They must never be
 collapsed into one field.
 
+## Preview issue ranking
+
+Use an authenticated `gh` session to preview an App rehearsal.
+
+```bash
+python3 workflows/github-delivery/delivery.py run OWNER/REPO --preview --documentation-only
+```
+
+The preview pins the default branch and reads its merged policy. Before policy
+setup, supply `--provisional-policy /path/to/delivery.toml` to use the proposed
+`version`, `branches.default_parent`, and `eligibility` settings. The result
+identifies the policy source. The rehearsal requires an unlabeled issue even
+when the required-label list is empty.
+
+The preview reads all open issues and open PRs, including drafts. For plausible
+candidates it checks dependencies, issue links, and overlapping PR paths.
+Documentation-only ranking requires explicit documentation scope and file paths.
+Eligible unlabeled issues are ordered oldest first. The result is `ranked`,
+`no_candidate`, or `coverage_incomplete`. Incomplete
+reads or unresolved scope return exit code 2. The preview uses GitHub GETs and
+exits before creating a delivery claim or invoking the publisher.
+
 ## Start and resume
 
 Use a protected state directory writable by the wrapper/publisher but not the
