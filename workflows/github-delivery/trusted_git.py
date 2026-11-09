@@ -27,11 +27,12 @@ class TrustedGit:
 
     def __init__(self, root: Path, canonical_url: str,
                  auth_env: dict[str, str] | None = None,
-                 require_explicit_token: bool = False):
+                 require_explicit_token: bool = False, *, allow_ambient_auth: bool = True):
         self.root = root.resolve()
         self.canonical_url = self._validate_canonical_url(canonical_url)
         self._auth_env = dict(auth_env) if auth_env is not None else None
         self._require_explicit_token = require_explicit_token
+        self._allow_ambient_auth = allow_ambient_auth
         self._token: str | None = None
         self.repo: Path | None = None
         self._runtime: Path | None = None
@@ -122,6 +123,13 @@ class TrustedGit:
                                  f"artifact hash mismatch: {path}")
         self.candidate_sha = sha
         self.base_sha = base_sha
+
+    def export_candidate(self, path: Path) -> None:
+        """Export the checked object from trusted Git, independent of agent scratch."""
+        self._require_open()
+        delivery.require(self.candidate_sha is not None, "candidate has not been imported")
+        self._git("update-ref", CANDIDATE_REF, self.candidate_sha)
+        self._git("bundle", "create", str(path), CANDIDATE_REF, f"^{self.base_sha}")
 
     def fetch_base(self, branch: str, expected_sha: str) -> None:
         """Fetch and pin the exact current base required by an incremental bundle."""
@@ -348,6 +356,8 @@ class TrustedGit:
             return token
         delivery.require(not self._require_explicit_token,
                          "explicit GitHub token is required for App mode")
+        if not self._allow_ambient_auth:
+            return None
         environment = {name: source[name] for name in
                        ("PATH", "HOME", "GH_CONFIG_DIR", "XDG_CONFIG_HOME") if source.get(name)}
         environment["GH_HOST"] = "github.com"

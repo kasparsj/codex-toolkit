@@ -22,6 +22,10 @@ def call_launcher(launcher: Path, packet: dict, *, app: dict | None = None) -> d
                if key in os.environ}
         env.update(DELIVERY_APP_CONFIG=app["config"], DELIVERY_PUBLISHER_ROOT=app["publisher_root"],
                    DELIVERY_PUBLISHER_REPO=packet["target_repo"])
+        if app.get("operator_app"):
+            env.update(DELIVERY_OPERATOR_APP=app["operator_app"],
+                       DELIVERY_OPERATOR_APP_DIGEST=app["operator_app_digest"],
+                       DELIVERY_OPERATOR_POLICY=app["operator_policy"])
     env["DELIVERY_PUBLISHER_ISOLATED"] = "1"
     completed = subprocess.run([str(launcher)], input=json.dumps(packet), text=True,
                                capture_output=True, env=env, check=False)
@@ -91,7 +95,7 @@ def expected_publication(state: dict, stage: str) -> dict:
                      f"{stage} base repository mismatch")
     delivery.require(result.get("issue") == issue, f"{stage} issue mismatch")
     delivery.validate_ref(base)
-    if state.get("credential_mode") == "app":
+    if delivery.protected_delivery(state):
         delivery.require(base == delivery.policy_branch(state["policy"]["ref"])
                          and base_sha == state["policy"]["sha"],
                          "App candidate differs from the pinned default-branch revision")
@@ -124,6 +128,8 @@ def packet_for(state: dict, action: str) -> dict:
               "policy_values": state["policy_values"]}
     if state.get("credential_mode") == "app":
         packet.update(credential_mode="app", app_binding_digest=state["app"]["digest"], issue=state["issue"])
+    if state.get("credential_mode") == "manual":
+        packet.update(credential_mode="manual", issue=state["issue"])
     return packet
 
 
@@ -154,6 +160,11 @@ def publish(state: dict, launcher: Path, stage: str, save=lambda _state: None) -
               "candidate": {"bundle_path": str(bundle), "paths": manifest["artifact_paths"],
                             "hashes": manifest.get("artifact_hashes")},
               "plan_approval": approval_request(state, "plan") if stage == "implementation" else None}
+    if state.get("credential_mode") == "manual":
+        import manual
+
+        return manual.prepare(state, packet, stage, save)
+
     def validate(result: dict) -> None:
         pr = result.get("pr", {})
         validate_pr(pr, expected, draft=True)
@@ -210,6 +221,11 @@ def approval_context(state: dict, stage: str) -> tuple[str, dict, str]:
         material_hashes=hashes, baseline_sha=baseline["sha"], base_repo=pr["repo"],
         base_ref=pr["base"], base_sha=pr["base_sha"], final_repo=state["repo"],
         final_ref=state["policy_values"]["delivery"]["final_target"], policy_digest=state["policy"]["digest"])
+    if state.get("credential_mode") == "manual":
+        context = delivery.digest_bytes(delivery.canonical_json({
+            "context": context, "delivery_id": state["delivery_id"], "pr_node_id": pr["node_id"],
+            "repository_id": pr["base_repo_id"], "author_id": pr["author_id"], "head_sha": pr["head_sha"],
+        }))
     return context, pr, pr["head_sha"]
 
 
@@ -229,14 +245,21 @@ def check_approval(state: dict, launcher: Path, stage: str) -> tuple[dict, str]:
     packet = {**packet_for(state, "list_reviews"),
               "stage": stage, "pr": pr, "context_digest": context,
               "generation": state["manifests"]["plan" if stage == "plan" else "implement"]["generation"]}
-    response = call_launcher(launcher, packet, **({"app": state["app"]} if "app" in state else {}))
+    developer = state.get("credential_mode") == "manual"
+    if developer:
+        import manual
+
+        response = manual.reviews(state, pr)
+    else:
+        response = call_launcher(launcher, packet, **({"app": state["app"]} if "app" in state else {}))
     delivery.require(response.get("paginated") is True, "publisher did not prove review pagination")
     validate_pr(response.get("pr", {}), pr, draft=True)
     config = state["policy_values"]["approvals"][stage]
     verdict = delivery.evaluate_reviews(response.get("reviews", []), stage=stage,
         generation=packet["generation"], context_digest=context, commit_id=commit_id,
-        authorized_ids=config["reviewer_ids"], publisher_id=state["policy_values"]["delivery"]["publisher_id"],
-        minimum=state["requirements"][stage], require_human=state.get("credential_mode") == "app")
+        authorized_ids=config["reviewer_ids"],
+        publisher_id=None if developer else state["policy_values"]["delivery"]["publisher_id"],
+        minimum=state["requirements"][stage], require_human=delivery.protected_delivery(state))
     state.setdefault("receipts", {})[stage] = {**verdict, "context_digest": context,
         "commit_id": commit_id, "checked_at": delivery.utc_now()}
     if verdict["approved"]: return state, "approve"
@@ -246,7 +269,9 @@ def check_approval(state: dict, launcher: Path, stage: str) -> tuple[dict, str]:
 
 def finalize(state: dict, launcher: Path, save=lambda _state: None) -> dict:
     app = state.get("credential_mode") == "app"
-    allowed = delivery.APP_FINALIZING if app else {"publication_pending"}
+    developer = state.get("credential_mode") == "manual"
+    allowed = (delivery.APP_FINALIZING | {"manual_ready_pending"} if developer else
+               delivery.APP_FINALIZING if app else {"publication_pending"})
     delivery.require(state["status"] in allowed, "finalize is out of order")
     receipt = state.get("receipts", {}).get("implementation", {})
     delivery.require(state["requirements"]["implementation"] == 0 or receipt.get("approved") is True,
@@ -261,6 +286,10 @@ def finalize(state: dict, launcher: Path, save=lambda _state: None) -> dict:
               "prior_pr": state.get("publication", {}).get("plan", {}).get("pr"),
               "approval": approval_request(state, "implementation"),
               "plan_approval": approval_request(state, "plan")}
+    if developer:
+        import manual
+
+        return manual.finalize(state, packet, save)
     deferred_head = state.get("actions_deferred_head") if app else None
     local = app and not state["policy_values"]["delivery"].get("require_github_actions", True)
     if deferred_head is not None:
@@ -322,7 +351,7 @@ def main(argv=None) -> int:
     try:
         coordinator = delivery.Coordinator(args.state_dir); state = coordinator.load(args.repo, args.delivery_id)
         with coordinator.runner_step(state) as state:
-            if state.get("credential_mode") == "app":
+            if delivery.protected_delivery(state):
                 delivery.require(args.launcher.resolve() == Path(state["publisher_launcher"]),
                                  "App publisher launcher differs from protected state")
             if args.command.startswith("publish-"):

@@ -1,4 +1,4 @@
-"""Read-only issue ranking for the App delivery rehearsal."""
+"""Read-only issue ranking for GitHub delivery."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from pathlib import Path
 import re
 import subprocess
 import tomllib
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, unquote, urlencode
 
 
 REPO = re.compile(r"(?:github\.com/)?([\w.-]+/[\w.-]+)", re.ASCII | re.IGNORECASE)
@@ -59,8 +59,8 @@ def read(endpoint, *, paginated=False, missing=False):
     return value
 
 
-def listing(endpoint, **params):
-    return read(f"{endpoint}?{urlencode({**params, 'per_page': 100})}", paginated=True)
+def listing(endpoint, *, reader=read, **params):
+    return reader(f"{endpoint}?{urlencode({**params, 'per_page': 100})}", paginated=True)
 
 
 def numbered(rows):
@@ -81,8 +81,8 @@ def labels(issue):
     return {label["name"] for label in names}
 
 
-def branch_tip(api, branch):
-    sha = read(f"{api}/git/ref/heads/{quote(branch, safe='/')}")["object"]["sha"]
+def branch_tip(api, branch, reader=read):
+    sha = reader(f"{api}/git/ref/heads/{quote(branch, safe='/')}")["object"]["sha"]
     require(isinstance(sha, str) and SHA.fullmatch(sha), "invalid default branch SHA")
     return sha
 
@@ -119,9 +119,14 @@ def text(item):
     return f"{title}\n{body or ''}"
 
 
-def issue_paths(issue):
-    content = re.sub(r"https?://\S+", "", text(issue))
-    return set(PATH.findall(content))
+def issue_paths(issue, repo):
+    content = text(issue)
+    links = re.findall(
+        rf"https://github\.com/{re.escape(repo)}/blob/[0-9a-f]{{40}}/([^\s)#?]+)",
+        content, flags=re.I,
+    )
+    content = re.sub(r"https?://\S+", "", content)
+    return set(PATH.findall(content)) | {unquote(path) for path in links}
 
 
 def documentation_scope(issue, paths):
@@ -163,19 +168,19 @@ def pr_revision(pr):
     return head["sha"], base["sha"], base["ref"], base["repo"]["id"]
 
 
-def pr_paths(api, pr):
+def pr_paths(api, pr, reader=read):
     endpoint = f"{api}/pulls/{pr['number']}"
-    before = read(endpoint)
+    before = reader(endpoint)
     revision = pr_revision(pr)
     require(pr_revision(before) == revision and before["state"] == "open",
             f"open PR #{pr['number']} changed during preview")
     count = before["changed_files"]
     require(type(count) is int and 0 <= count <= 3000,
             f"cannot read complete file list for PR #{pr['number']}")
-    files = listing(f"{endpoint}/files")
+    files = listing(f"{endpoint}/files", reader=reader)
     require(len(files) == count and all(isinstance(row.get("filename"), str) for row in files),
             f"incomplete file list for PR #{pr['number']}")
-    after = read(endpoint)
+    after = reader(endpoint)
     require(pr_revision(after) == revision and after["state"] == "open" and after["changed_files"] == count,
             f"open PR #{pr['number']} changed during file reads")
     return {row[key] for row in files for key in ("filename", "previous_filename")
@@ -195,26 +200,24 @@ def linked_from_timeline(events, repo, pulls):
     return linked
 
 
-def rank(api, repo, issues, pulls, policy, documentation_only):
+def rank(api, repo, issues, pulls, policy, documentation_only=False, *, reader=read):
     eligible, excluded, unresolved = [], [], []
     links = {number: explicit_links(pr, repo) for number, pr in pulls.items()}
     changed_paths = {}
     for number, issue in issues.items():
-        names = labels(issue)
+        names = {name.casefold() for name in labels(issue)}
         covered = sorted(pr for pr, targets in links.items() if number in targets)
         item = {"number": number, "title": issue["title"]}
         if covered:
             item["pull_requests"] = covered
-        if names.intersection(policy["excluded_labels"]):
+        if names.intersection(name.casefold() for name in policy["excluded_labels"]):
             excluded.append({**item, "reason": "excluded_label"})
-        elif not set(policy["required_labels"]).issubset(names):
+        elif not {name.casefold() for name in policy["required_labels"]}.issubset(names):
             excluded.append({**item, "reason": "missing_required_label"})
-        elif names:
-            excluded.append({**item, "reason": "rehearsal_requires_unlabeled_issue", "labels": sorted(names)})
         elif covered:
             excluded.append({**item, "reason": "linked_open_pull_request"})
         else:
-            paths = issue_paths(issue)
+            paths = issue_paths(issue, repo)
             scope = documentation_scope(issue, paths) if documentation_only else None
             if scope in {"non_documentation_paths", "non_documentation_intent"}:
                 excluded.append({**item, "reason": scope})
@@ -223,13 +226,13 @@ def rank(api, repo, issues, pulls, policy, documentation_only):
                 unresolved.append({**item, "reason": scope or "scope_paths_missing"})
                 continue
             issue_api = f"{api}/issues/{number}"
-            dependencies = listing(f"{issue_api}/dependencies/blocked_by")
+            dependencies = listing(f"{issue_api}/dependencies/blocked_by", reader=reader)
             require(all(dep.get("state") in {"open", "closed"} for dep in dependencies),
                     f"unreadable dependencies for issue #{number}")
             if any(dep["state"] == "open" for dep in dependencies):
                 excluded.append({**item, "reason": "open_dependency"})
                 continue
-            timeline = listing(f"{issue_api}/timeline")
+            timeline = listing(f"{issue_api}/timeline", reader=reader)
             referenced = linked_from_timeline(timeline, repo, pulls)
             if referenced:
                 unresolved.append({**item, "reason": "open_pull_request_cross_reference",
@@ -247,57 +250,106 @@ def rank(api, repo, issues, pulls, policy, documentation_only):
                 continue
             for pr_number, pr in pulls.items():
                 if pr_number not in changed_paths:
-                    changed_paths[pr_number] = pr_paths(api, pr)
-            overlaps = sorted(pr for pr, files in changed_paths.items() if paths.intersection(files))
+                    changed_paths[pr_number] = pr_paths(api, pr, reader)
+            overlaps = sorted(pr for pr, files in changed_paths.items()
+                              if paths.intersection(files)
+                              or {path for path in paths if "/" not in path}
+                              .intersection(Path(file).name for file in files))
             if overlaps:
                 unresolved.append({**item, "reason": "open_pull_request_path_overlap", "pull_requests": overlaps})
                 continue
             eligible.append({**item, "paths": sorted(paths), "created_at": issue["created_at"],
                              "reason": "policy and open PR coverage checks passed"})
-    # For an unlabeled rehearsal, older issues break ties.
+    # Oldest eligible issue first, with issue number as the stable tie-break.
     eligible.sort(key=lambda item: (item["created_at"], item["number"]))
     return eligible, excluded, unresolved
 
 
-def run(repository, provisional=None, *, documentation_only=False):
+def scan(repo, policy, documentation_only=False, *, reader=read, own_pr=None):
+    api = f"repos/{repo}"
+    issues = numbered([row for row in listing(f"{api}/issues", state="open", reader=reader) if "pull_request" not in row])
+    pulls = numbered(listing(f"{api}/pulls", state="open", reader=reader))
+    require(all(issue.get("state") == "open" and isinstance(issue.get("created_at"), str)
+                and isinstance(issue.get("title"), str)
+                for issue in issues.values()), "unreadable open issue inventory")
+    require(all(pr.get("state") == "open" and type(pr.get("draft")) is bool
+                and isinstance(pr["head"]["ref"], str) and SHA.fullmatch(pr["head"]["sha"])
+                for pr in pulls.values()), "unreadable open PR inventory")
+    if own_pr is not None:
+        own = pulls.get(own_pr["number"])
+        require(own is not None and own.get("node_id") == own_pr["node_id"],
+                "bound draft disappeared during competing PR scan")
+        del pulls[own_pr["number"]]
+    inventory = {"open_issues": len(issues),
+                 "unlabeled_issues": sum(not labels(i) for i in issues.values()),
+                 "open_pull_requests": len(pulls),
+                 "draft_pull_requests": sum(pr["draft"] for pr in pulls.values())}
+    return inventory, *rank(api, repo, issues, pulls, policy, documentation_only, reader=reader)
+
+
+def effective_filters(policy):
+    eligibility = policy["eligibility"]
+    label = policy["tracking"]["review_label"]
+    return {"required_labels": eligibility["required_labels"],
+            "excluded_labels": sorted(set(eligibility["excluded_labels"]) | {label})}
+
+
+def verify_candidate(repo, issue, policy, *, reader, own_pr=None):
+    _, ranked, excluded, unresolved = scan(repo, effective_filters(policy), reader=reader, own_pr=own_pr)
+    if issue is None:
+        require(ranked and not unresolved, "cannot select a winner: no candidate or incomplete coverage")
+        return ranked[0]["number"]
+    for item in ranked:
+        if item["number"] == issue:
+            return issue
+    reason = next((item["reason"] for item in excluded + unresolved if item["number"] == issue),
+                  "issue_not_open_or_unreadable")
+    raise PreviewError(f"issue #{issue} is not eligible: {reason}")
+
+
+def run(repository, provisional=None, *, documentation_only=False, reader=read,
+        resolve=None, readiness=None):
     result = {"schema_version": 1, "repo": repository, "mode": "preview", "winner": None}
     try:
         match = REPO.fullmatch(repository)
         require(match is not None and all(part not in {".", ".."} for part in match[1].split("/")),
                 "preview repository must be owner/name on github.com")
         requested = match[1]
-        identity = read(f"repos/{requested}")
+        identity = reader(f"repos/{requested}")
         repo, branch = identity["full_name"], identity["default_branch"]
         require(repo.lower() == requested.lower() and type(identity["id"]) is int and identity["id"] > 0,
                 "repository identity mismatch")
         require(isinstance(branch, str) and branch and not branch.startswith("-"),
                 "invalid default branch")
         api = f"repos/{repo}"
-        sha = branch_tip(api, branch)
+        sha = branch_tip(api, branch, reader)
         result.update(repo=repo, repository_id=identity["id"], base={"ref": branch, "sha": sha},
                       scope="documentation_only" if documentation_only else "all")
-        policy = policy_at(api, branch, sha, provisional)
-        result["policy"] = policy
-        issues = numbered([row for row in listing(f"{api}/issues", state="open") if "pull_request" not in row])
-        pulls = numbered(listing(f"{api}/pulls", state="open"))
-        require(all(issue.get("state") == "open" and isinstance(issue.get("created_at"), str)
-                    and isinstance(issue.get("title"), str)
-                    for issue in issues.values()), "unreadable open issue inventory")
-        require(all(pr.get("state") == "open" and type(pr.get("draft")) is bool
-                    and isinstance(pr["head"]["ref"], str) and SHA.fullmatch(pr["head"]["sha"])
-                    for pr in pulls.values()), "unreadable open PR inventory")
-        result["inventory"] = {"open_issues": len(issues), "unlabeled_issues": sum(not labels(i) for i in issues.values()),
-                               "open_pull_requests": len(pulls), "draft_pull_requests": sum(pr["draft"] for pr in pulls.values())}
-        ranked, excluded, unresolved = rank(api, repo, issues, pulls, policy, documentation_only)
-        current = read(api)
+        if resolve is None:
+            policy = policy_at(api, branch, sha, provisional)
+            result["policy"] = policy
+        else:
+            effective = resolve(repo, branch, sha)
+            policy = effective_filters(effective)
+            result["policy"] = {**effective["_source"], **policy,
+                                "review_label": effective["tracking"]["review_label"],
+                                "approvals": effective["approvals"],
+                                "branches": effective["branches"],
+                                "verification": ("actions" if effective["delivery"].get(
+                                    "require_github_actions", True) else "local")}
+            if readiness is not None:
+                result["publication_readiness"] = readiness(repo, branch, sha, effective)
+        inventory, ranked, excluded, unresolved = scan(repo, policy, documentation_only, reader=reader)
+        result["inventory"] = inventory
+        current = reader(api)
         require(current["id"] == identity["id"] and current["full_name"] == repo
-                and current["default_branch"] == branch and branch_tip(api, branch) == sha,
+                and current["default_branch"] == branch and branch_tip(api, branch, reader) == sha,
                 "repository or default branch changed during preview")
-        result.update(shortlist=ranked[:5], exclusions=excluded, unresolved=unresolved)
+        result.update(shortlist=ranked, exclusions=excluded, unresolved=unresolved)
         result["status"] = "coverage_incomplete" if unresolved else "ranked" if ranked else "no_candidate"
         if result["status"] == "ranked":
             result["winner"] = ranked[0]["number"]
-    except (PreviewError, OSError, KeyError, TypeError, ValueError, AttributeError) as exc:
+    except (RuntimeError, OSError, KeyError, TypeError, ValueError, AttributeError) as exc:
         # Invalid upstream shapes and local policy errors also fail closed.
         result.update(status="coverage_incomplete", error=str(exc), winner=None)
     return result

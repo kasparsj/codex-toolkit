@@ -87,9 +87,36 @@ class GitHubClient:
         )
 
 
+def verify_audited_workflows(repo, sha, expected, reader):
+    root = f"repos/{repo}/contents"
+    entries = reader(f"{root}/.github/workflows?ref={sha}", missing=True)
+    if entries is None:
+        delivery.require(isinstance(reader(f"{root}?ref={sha}"), list),
+                         "cannot establish pinned workflow inventory access")
+        entries = []
+    delivery.require(isinstance(entries, list) and len(entries) < 1000,
+                     "audited workflow inventory is unreadable or truncated")
+    paths = []
+    for entry in entries:
+        path = entry.get("path")
+        delivery.require(isinstance(path, str), "audited workflow path is invalid")
+        if path.lower().endswith((".yml", ".yaml")):
+            delivery.require(entry.get("type") == "file", "audited workflow must be a regular file")
+            paths.append(path)
+    delivery.require(isinstance(expected, dict) and sorted(paths) == sorted(expected),
+                     "audited workflow inventory changed")
+    for path, digest in expected.items():
+        content = reader(f"{root}/{quote(path, safe='/')}?ref={sha}")
+        delivery.require(content.get("type") == "file" and content.get("encoding") == "base64",
+                         "audited workflow is unreadable")
+        raw = base64.b64decode("".join(content["content"].split()), validate=True)
+        delivery.require(delivery.digest_bytes(raw) == digest,
+                         f"audited workflow content changed: {path}")
+
+
 class Publisher:
     def __init__(self, *, repo: str, root: Path, client: GitHubClient,
-                 git_factory=TrustedGit, app_session=None):
+                 git_factory=TrustedGit, app_session=None, operator_policy=None):
         self.repo = canonical_repo(repo)
         delivery.require(not root.is_symlink(), "trusted publisher root is invalid")
         self.root = root.resolve()
@@ -105,6 +132,7 @@ class Publisher:
         self.client = client
         self.git_factory = git_factory
         self.app_session = app_session
+        self.operator_policy = operator_policy
         self.publisher_lock_fd: int | None = None
         self.issue_digest: str | None = None
         _, owner, name = repo_parts(self.repo)
@@ -194,6 +222,25 @@ class Publisher:
             f"/repos/{{owner}}/{{repo}}/git/ref/heads/{quote(branch, safe='/')}",
         )
         delivery.require(ref.get("object", {}).get("sha") == source_sha, "trusted policy ref moved")
+        if self.operator_policy is not None:
+            import effective_policy
+            import onboarding
+
+            binding = self.app_session.binding
+            reader = onboarding.app_reader(self.client, self.repo)
+            repository = reader(f"repos/{binding.repository}")
+            delivery.require(repository.get("default_branch") == branch
+                             and repository.get("id") == binding.repository_id
+                             and repository.get("full_name") == binding.repository
+                             and repository.get("private") is True,
+                             "default branch or repository binding changed")
+            actual = onboarding.resolve(effective_policy.load(self.operator_policy),
+                                        binding.repository, branch, source_sha, reader)
+            delivery.require(actual == packet.get("policy_values") and actual["_source"] == policy,
+                             "protected defaults, repository override or effective policy drifted")
+            return
+        delivery.require("effective_digest" not in policy,
+                         "M2 requires protected operator policy resolution")
         content = self.client.api(
             "GET",
             self.repo,
@@ -232,23 +279,38 @@ class Publisher:
             issue.get("state") == "open" and "pull_request" not in issue,
             "source issue is not open",
         )
-        labels = {item.get("name") for item in issue.get("labels", [])}
+        labels = {item["name"].casefold() for item in issue.get("labels", [])}
         eligibility = packet["policy_values"].get("eligibility", {})
         delivery.require(
-            set(eligibility.get("required_labels", [])) <= labels,
+            {name.casefold() for name in eligibility.get("required_labels", [])} <= labels,
             "source issue lost required eligibility labels",
         )
         delivery.require(
-            not labels.intersection(eligibility.get("excluded_labels", [])),
+            not labels.intersection(name.casefold() for name in eligibility.get("excluded_labels", [])),
             "source issue has an excluded label",
         )
-        if packet.get("initial"):
-            delivery.require(not labels, "initial source issue must be unlabeled")
+        if packet.get("initial") and self.operator_policy is None:
+            delivery.require(not labels, "legacy fixture source issue must be unlabeled")
         return issue
 
     def _identity_evidence(self) -> dict[str, Any]:
         delivery.require(self.app_session is not None, "App session is unavailable")
         return self.app_session.identity_evidence()
+
+    def _verify_onboarded_candidate(self, packet, *, check_coverage):
+        import onboarding
+        import preview
+
+        binding = self.app_session.binding
+        policy = packet["policy_values"]
+        branch = delivery.policy_branch(packet["policy"]["ref"])
+        owned = policy["branches"]["plan_template"].format(issue=packet["issue"])
+        delivery.validate_ref(owned)
+        delivery.require(owned != branch, "App delivery branch must differ from the default branch")
+        reader = onboarding.app_reader(self.client, self.repo)
+        if check_coverage:
+            preview.verify_candidate(binding.repository, packet["issue"], policy, reader=reader)
+        return onboarding.branch_rules(binding.repository, branch, owned, reader)
 
     def _preflight(self, packet: dict[str, Any]) -> dict[str, Any]:
         delivery.require(packet.get("credential_mode") == "app",
@@ -265,15 +327,15 @@ class Publisher:
         default_branch = repository.get("default_branch")
         policy = packet["policy_values"]
         delivery.require(
-            policy["eligibility"].get("required_labels") == []
+            (self.operator_policy is not None or policy["eligibility"].get("required_labels") == [])
             and policy["branches"]["plan_template"]
             == policy["branches"]["implementation_template"]
             and all(
-                policy["approvals"][stage].get("minimum") == 1
-                and len(policy["approvals"][stage].get("reviewer_ids", [])) == 1
+                1 <= policy["approvals"][stage].get("minimum", 0)
+                <= len(policy["approvals"][stage].get("reviewer_ids", []))
                 for stage in ("plan", "implementation")
             ),
-            "disposable M1 policy does not match the reviewed gate profile",
+            "App delivery requires a shared draft branch and configured human reviewers",
         )
         delivery.require(
             isinstance(default_branch, str)
@@ -282,6 +344,9 @@ class Publisher:
             and delivery.policy_branch(packet["policy"]["ref"]) == default_branch,
             "policy and repository default branches differ",
         )
+        effective_rules = None
+        if self.operator_policy is not None:
+            effective_rules = self._verify_onboarded_candidate(packet, check_coverage=packet.get("initial", False))
         protection = self.client.api(
             "GET", self.repo,
             f"/repos/{{owner}}/{{repo}}/branches/{quote(default_branch, safe='')}",
@@ -297,6 +362,10 @@ class Publisher:
         delivery.require(existing_label.get("name") == label, "App policy review label differs from GitHub")
         if policy["delivery"].get("require_github_actions", True):
             self._verify_fixture_workflow(binding.ci, packet["policy"]["sha"])
+        elif self.operator_policy is not None:
+            import onboarding
+            onboarding.verify_local_readiness(binding.repository, packet["policy"]["sha"],
+                                               self._local_profile(), onboarding.app_reader(self.client, self.repo))
         else:
             self._verify_audited_workflows(self._local_profile(), packet["policy"]["sha"])
         reviewer_ids = sorted({
@@ -339,7 +408,8 @@ class Publisher:
         return {
             "schema_version": 1,
             "action": "preflight",
-            "identity": {**self._identity_evidence(), "default_branch_protected": branch_protected},
+            "identity": {**self._identity_evidence(), "default_branch_protected": branch_protected,
+                         **({"branch_rules": effective_rules} if effective_rules else {})},
             "snapshot": {
                 "schema_version": 1,
                 "repo": packet["target_repo"],
@@ -684,7 +754,7 @@ class Publisher:
                 delivery.require(pr[field] == expected_pr[field], f"reviewed PR {field} changed")
         delivery.require(pr["state"] == "OPEN", "reviewed PR is not open")
         reviews = self._reviews(pr["number"])
-        if packet.get("credential_mode") == "app":
+        if delivery.protected_delivery(packet):
             authorized = set(evidence["reviewer_ids"])
             for review in reviews:
                 user = review.get("user", {})
@@ -708,9 +778,10 @@ class Publisher:
             context_digest=evidence["context_digest"],
             commit_id=expected_pr["head_sha"],
             authorized_ids=evidence["reviewer_ids"],
-            publisher_id=packet["policy_values"]["delivery"]["publisher_id"],
+            publisher_id=(None if packet.get("credential_mode") == "manual" else
+                          packet["policy_values"]["delivery"]["publisher_id"]),
             minimum=evidence["minimum"],
-            require_human=packet.get("credential_mode") == "app",
+            require_human=delivery.protected_delivery(packet),
         )
         delivery.require(verdict["approved"], f"{evidence['stage']} approval is not current")
 
@@ -1162,6 +1233,8 @@ class Publisher:
             if verified_superseded is not None:
                 trusted.require_material_change(supersedes["head_sha"])
             if current != expected["head_sha"]:
+                if self.operator_policy is not None:
+                    self._verify_onboarded_candidate(packet, check_coverage=prior is None)
                 self._verify_policy(packet)
                 self._base_tip(expected)
                 if packet["action"] == "publish_implementation":
@@ -1255,6 +1328,8 @@ class Publisher:
             )
             operation = "pr_update"
         else:
+            if self.operator_policy is not None:
+                self._verify_onboarded_candidate(packet, check_coverage=True)
             self._verify_policy(packet)
             self._base_tip(expected)
             if packet["action"] == "publish_implementation":
@@ -1323,10 +1398,15 @@ class Publisher:
 
     def _local_verification(self, packet: dict[str, Any], pr: dict[str, Any]) -> dict[str, Any]:
         profile = self._local_profile()
+        return self.verify_local_revision(packet, pr, profile, packet["app_binding_digest"])
+
+    def verify_local_revision(self, packet, pr, profile, binding_digest):
         scope = {"repo": self.repo, "delivery_id": packet["delivery_id"], "pr_number": pr["number"],
                  "head_sha": pr["head_sha"], "base_sha": pr["base_sha"],
                  "policy_digest": packet["policy"]["digest"],
-                 "binding_digest": packet["app_binding_digest"]}
+                 "binding_digest": binding_digest,
+                 **({"pr_node_id": pr["node_id"], "repository_id": pr["base_repo_id"]}
+                    if packet.get("credential_mode") == "manual" else {})}
         key = delivery.digest_bytes(delivery.canonical_json(scope))
         receipt = self.root / "local-verification" / f"{key}.json"
         if receipt.exists():
@@ -1385,7 +1465,7 @@ class Publisher:
             return self._finalize_issue(packet, current)
         self._approval(packet, "plan_approval")
         self._approval(packet)
-        if not app or require_actions is not False:
+        if not app or require_actions is not False or self.operator_policy is not None:
             ci = self._finalization_ci(packet, current)
             if ci["status"] not in {"success", "deferred"}:
                 suffix = "waiting" if ci["status"] == "waiting" else "blocked"
@@ -1511,6 +1591,7 @@ def main() -> int:
         delivery.require(bool(root_value), "trusted publisher root is missing")
         app_config = os.environ.get("DELIVERY_APP_CONFIG")
         session = None
+        operator_policy = None
         client = GitHubClient()
         git_factory = TrustedGit
         if packet.get("credential_mode") == "app":
@@ -1520,6 +1601,19 @@ def main() -> int:
             )
             delivery.require(Path(root_value).resolve().is_relative_to(binding.state_dir),
                              "publisher root is outside the protected App state directory")
+            if operator_app := os.environ.get("DELIVERY_OPERATOR_APP"):
+                from discovery import DiscoveredRepository, OperatorAppProfile
+
+                profile = OperatorAppProfile.load(
+                    Path(operator_app), expected_digest=os.environ["DELIVERY_OPERATOR_APP_DIGEST"],
+                )
+                selected = DiscoveredRepository(binding.installation_id, binding.account_id,
+                                                binding.repository_id, binding.repository, "")
+                delivery.require(binding.account_id in profile.allowed_account_ids
+                                 and delivery.digest_bytes(delivery.canonical_json(profile.binding_value(selected)))
+                                 == binding.digest, "App binding differs from the protected operator profile")
+                operator_policy = Path(os.environ["DELIVERY_OPERATOR_POLICY"])
+                delivery.require("actions_deferred_head" not in packet, "M2 requires trusted verification")
             session = AppAuthenticator(binding).mint()
             auth_env = session.auth_env()
             app_client = session.publisher_client()
@@ -1535,6 +1629,7 @@ def main() -> int:
             client=client,
             git_factory=git_factory,
             app_session=session,
+            operator_policy=operator_policy,
         )
         result = publisher.execute(packet)
         if app_client is not None:
@@ -1542,8 +1637,7 @@ def main() -> int:
             app_client = None
         print(json.dumps(result, sort_keys=True))
         return 0
-    except (delivery.DeliveryError, KeyError, TypeError, ValueError, OSError,
-            json.JSONDecodeError) as exc:
+    except (RuntimeError, KeyError, TypeError, ValueError, OSError, subprocess.TimeoutExpired) as exc:
         print(json.dumps({"status": "blocked", "error": str(exc)}, sort_keys=True))
         return 2
     finally:

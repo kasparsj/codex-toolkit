@@ -113,8 +113,8 @@ def preflight(*, state: dict[str, Any], launcher: Path, worktree: Path,
               scratch: Path, skills_root: Path) -> dict[str, Any]:
     """Prove the local isolation inputs before any App-mode agent dispatch."""
     agent = state.get("agent", {})
-    app = state.get("app", {})
-    delivery.require(state.get("credential_mode") == "app", "container profile requires App mode")
+    app = state.get("app") or state.get("manual", {})
+    delivery.require(delivery.protected_delivery(state), "container profile requires protected delivery mode")
     delivery.require(agent.get("isolation_profile") == "container",
                      "App mode requires the container isolation profile")
     image = agent.get("container_image")
@@ -146,7 +146,14 @@ def preflight(*, state: dict[str, Any], launcher: Path, worktree: Path,
                          "protected delivery state must be outside agent mounts")
         delivery.require(not _inside(Path.home().resolve(), mounted),
                          "host home must be outside agent mounts")
-        for label in ("config", "private_key_path", "publisher_root"):
+        protected_labels = ("config", "publisher_root")
+        if state.get("credential_mode") == "app":
+            protected_labels += ("private_key_path",)
+        elif app.get("read_token_file"):
+            protected_labels += ("read_token_file",)
+        if app.get("operator_app"):
+            protected_labels += ("operator_app", "operator_policy")
+        for label in protected_labels:
             raw_protected = app.get(label)
             delivery.require(isinstance(raw_protected, str) and Path(raw_protected).is_absolute(),
                              f"protected App {label} path must be absolute")
