@@ -94,7 +94,7 @@ class AppAuthTest(unittest.TestCase):
                             "pull_requests": "write", "issues": "write", "actions": "read"},
             "private_key_path": str(self.key),
             "state_dir": str(self.state),
-            "allowed_path_prefixes": ["docs/", "src/"],
+            "allowed_path_prefixes": ["docs/", "src/exact.py"],
             "ci": {"workflow_id": 66, "workflow_path": ".github/workflows/ci.yml",
                    "workflow_sha256": "a" * 64,
                    "event": "pull_request", "required_job": "test"},
@@ -138,9 +138,20 @@ class AppAuthTest(unittest.TestCase):
                       api.requests)
         self.assertEqual(session.identity_evidence()["repository_id"], 55)
         self.assertNotIn("token", session.identity_evidence())
-        binding.verify_candidate_paths(["docs/plan.md", "src/change.py"])
+        binding.verify_candidate_paths(["docs/plan.md", "src/exact.py"])
         with self.assertRaisesRegex(Exception, "outside the App allowlist"):
             binding.verify_candidate_paths([".github/workflows/ci.yml"])
+        with self.assertRaisesRegex(Exception, "outside the App allowlist"):
+            binding.verify_candidate_paths(["src/exact.py.backup"])
+
+    def test_rejects_unsafe_exact_or_prefix_path_allowlist_entries(self):
+        for value in ("/src/x.py", "../x.py", "src/../x.py", "src//x.py",
+                      ".github", ".github/x", ".git/config", "src\\x.py"):
+            with self.subTest(value=value):
+                self.value["allowed_path_prefixes"] = [value]
+                self._write_config()
+                with self.assertRaisesRegex(Exception, "allowed path prefix"):
+                    self.binding()
 
     def test_loads_local_verifier_with_or_without_actions_ci(self):
         verifier = {
@@ -332,6 +343,12 @@ class AppAuthTest(unittest.TestCase):
         repo = "/repos/acme/private-fixture"
         sha = "1" * 40
         allowed = (
+            ("GET", f"{repo}/issues?state=open&per_page=100", None),
+            ("GET", f"{repo}/pulls?state=open&per_page=100", None),
+            ("GET", f"{repo}/pulls/1/files?per_page=100", None),
+            ("GET", f"{repo}/issues/1/dependencies/blocked_by?per_page=100", None),
+            ("GET", f"{repo}/issues/1/timeline?per_page=100", None),
+            ("GET", f"{repo}/rules/branches/main?per_page=100", None),
             ("GET", f"{repo}/contents/.github/delivery.toml?ref={sha}", None),
             ("GET", f"{repo}/contents/.github/workflows?ref={sha}", None),
             ("GET", f"{repo}/contents/.github/workflows/ci.yml?ref={sha}", None),

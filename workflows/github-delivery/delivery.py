@@ -223,7 +223,8 @@ def adapter_hashes() -> dict[str, str]:
     root = Path(__file__).resolve().parent
     names = ("delivery.py", "adapter.py", "publisher_adapter.py", "publisher.py",
              "trusted_git.py", "workflow.yaml", "app_auth.py", "agent_isolation.py",
-             "fixtures/delivery-fixture.yml", "local_verifier.py")
+             "fixtures/delivery-fixture.yml", "local_verifier.py",
+             "preview.py", "onboarding.py", "effective_policy.py", "discovery.py")
     return {name: digest_bytes((root / name).read_bytes()) for name in names}
 
 
@@ -642,21 +643,28 @@ def parser() -> argparse.ArgumentParser:
     preview.add_argument("--preview", action="store_true", required=True)
     preview.add_argument("--provisional-policy", type=Path)
     preview.add_argument("--documentation-only", action="store_true")
+    preview.add_argument("--operator-app", type=Path)
+    preview.add_argument("--operator-policy", type=Path)
+    discover = sub.add_parser("discover", help="discover selected GitHub App repositories")
+    discover.add_argument("repo", nargs="?")
+    discover.add_argument("--operator-app", type=Path, required=True)
     start = sub.add_parser("start")
     start.add_argument("--state-dir", type=Path, required=True); start.add_argument("--repo", required=True)
     start.add_argument("--issue", type=int); start.add_argument("--delivery-id")
-    start.add_argument("--policy", type=Path, required=True); start.add_argument("--policy-ref", required=True)
-    start.add_argument("--policy-sha", required=True); start.add_argument("--policy-digest", required=True)
-    start.add_argument("--policy-fetched-at", required=True); start.add_argument("--skills-root", type=Path, required=True)
+    start.add_argument("--policy", type=Path); start.add_argument("--policy-ref")
+    start.add_argument("--policy-sha"); start.add_argument("--policy-digest")
+    start.add_argument("--policy-fetched-at"); start.add_argument("--skills-root", type=Path, required=True)
     start.add_argument("--no-dispatch", action="store_true", help=argparse.SUPPRESS)
     start.add_argument("--agent-launcher", type=Path, required=True)
     start.add_argument("--publisher-launcher", type=Path)
     start.add_argument("--app-config", type=Path)
+    start.add_argument("--operator-app", type=Path)
+    start.add_argument("--operator-policy", type=Path)
     start.add_argument("--container-image")
     start.add_argument("--worktree", type=Path, required=True); start.add_argument("--agent-scratch", type=Path, required=True)
     for name in ("status", "resume", "recover", "advance"):
         cmd = sub.add_parser(name); cmd.add_argument("--state-dir", type=Path, required=True)
-        cmd.add_argument("--repo", required=True); cmd.add_argument("--delivery-id", required=True)
+        cmd.add_argument("--repo", required=True); cmd.add_argument("--delivery-id", required=name == "advance")
         if name in ("resume", "recover"): cmd.add_argument("--skills-root", type=Path, required=True)
         if name == "resume":
             cmd.add_argument("--result", type=Path)
@@ -774,7 +782,7 @@ def app_claim(coordinator: Coordinator, state: dict[str, Any]) -> None:
 def start_app(coordinator: Coordinator, args, policy: dict[str, Any], agent: dict[str, str]) -> dict[str, Any]:
     from app_auth import AppBinding
 
-    require(args.issue is not None and args.issue > 0, "App M1 requires one explicit issue")
+    require(args.issue is not None and args.issue > 0, "App start requires an eligible issue")
     require(not args.no_dispatch, "App M1 starts through the pinned runner")
     launcher = Path(__file__).resolve().with_name("publisher.py")
     require(args.publisher_launcher is None or args.publisher_launcher.resolve() == launcher,
@@ -790,6 +798,9 @@ def start_app(coordinator: Coordinator, args, policy: dict[str, Any], agent: dic
            "publisher_root": str(repo_dir / "publisher"),
            "repository_id": binding.repository_id, "repository_full_name": binding.repository,
            "private_key_path": str(binding.private_key_path)}
+    if getattr(args, "operator_app", None):
+        app.update(operator_app=str(args.operator_app), operator_app_digest=args.operator_app_digest,
+                   operator_policy=str(args.operator_policy))
     with mutex(repo_dir / "execution.lock") as execution_fd:
         active_path = repo_dir / "active.json"
         if active_path.exists():
@@ -819,6 +830,7 @@ def resume_app(coordinator: Coordinator, args) -> dict[str, Any]:
             app_claim(coordinator, state)
             defer_actions = getattr(args, "defer_actions_verification", False)
             if defer_actions:
+                require(not state["app"].get("operator_app"), "M2 requires trusted verification")
                 require(state["policy_values"]["delivery"].get("require_github_actions", True),
                         "fixture deferral is incompatible with the repository's Actions policy")
                 require(state["status"] == "implementation_review" and state["runner_status"] == "paused"
@@ -865,19 +877,85 @@ def resume_app(coordinator: Coordinator, args) -> dict[str, Any]:
         return run_app(coordinator, state, execution_fd)
 
 
+def resolve_app_start(coordinator, args):
+    from discovery import OperatorAppProfile
+    import effective_policy
+    import onboarding
+    import preview
+
+    require(args.operator_policy is not None and args.app_config is None and not any(
+        (args.policy, args.policy_sha, args.policy_ref, args.policy_digest, args.policy_fetched_at)),
+        "M2 requires an operator policy and does not accept legacy App or policy pins")
+    profile = OperatorAppProfile.load(args.operator_app)
+    defaults = effective_policy.load(args.operator_policy)
+    with onboarding.installed_reader(profile, repo_identity(args.repo).removeprefix("github.com/")) as (repo, reader):
+        name, branch = repo.full_name, repo.default_branch
+        sha = preview.branch_tip(f"repos/{name}", branch, reader)
+        policy = onboarding.resolve(defaults, name, branch, sha, reader)
+        args.issue = preview.verify_candidate(name, args.issue, policy, reader=reader)
+        require(policy["delivery"].get("publisher_id") == profile.bot_user_id,
+                "protected operator policy must name the verified App bot as publisher")
+        require(preview.branch_tip(f"repos/{name}", branch, reader) == sha,
+                "default branch changed during selection")
+    require(profile.publication is not None, "operator App publication settings are missing")
+    require(Path(profile.publication["state_dir"]).resolve() == coordinator.root,
+            "App state directory differs from protected profile")
+    require(coordinator.root.is_dir() and coordinator.root.stat().st_uid == os.geteuid()
+            and coordinator.root.stat().st_mode & 0o077 == 0,
+            "M2 requires a pre-provisioned owner-only state directory")
+    bindings = coordinator.root / "bindings"
+    bindings.mkdir(mode=0o700, exist_ok=True)
+    require(not bindings.is_symlink(), "generated binding directory must not be a symlink")
+    args.operator_app_digest = profile.digest
+    args.app_config = bindings / f"{repo.repository_id}-{profile.digest}-{repo.installation_id}.json"
+    profile.write_binding(repo, args.app_config)
+    return policy
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
-    if args.command == "run":
-        from preview import run
-
-        value = run(args.repo, args.provisional_policy, documentation_only=args.documentation_only)
-        print(json.dumps(value, sort_keys=True))
-        return 2 if value["status"] == "coverage_incomplete" else 0
     try:
+        if args.command in ("discover", "run"):
+            from discovery import AppDiscovery, OperatorAppProfile
+            import effective_policy
+            import onboarding
+            import preview
+
+            name = repo_identity(args.repo).removeprefix("github.com/") if args.repo else None
+            if args.command == "discover":
+                inventory = AppDiscovery(OperatorAppProfile.load(args.operator_app)).discover(name)
+                value = {"status": "discovered", **inventory.evidence()}
+                print(json.dumps(value, sort_keys=True))
+                return 0
+            if args.operator_app or args.operator_policy:
+                require(args.operator_policy is not None and args.provisional_policy is None
+                        and not args.documentation_only,
+                        "operator-policy preview does not accept legacy rehearsal filters")
+                defaults = effective_policy.load(args.operator_policy)
+                if args.operator_app:
+                    value = onboarding.installed_preview(name, OperatorAppProfile.load(args.operator_app), defaults)
+                else:
+                    value = preview.run(name, resolve=lambda repo, branch, sha:
+                                        onboarding.resolve(defaults, repo, branch, sha, preview.read))
+                    value["publication_readiness"] = {
+                        "status": "blocked", "blockers": ["App installation was not verified"],
+                        "read_authentication": "operator_gh",
+                    }
+            else:
+                value = preview.run(args.repo, args.provisional_policy,
+                                    documentation_only=args.documentation_only)
+            print(json.dumps(value, sort_keys=True))
+            return 2 if value["status"] == "coverage_incomplete" else 0
         coordinator = Coordinator(args.state_dir)
         if args.command == "start":
-            policy = load_policy(args.policy, expected_digest=args.policy_digest,
-                source_ref=args.policy_ref, source_sha=args.policy_sha, fetched_at=args.policy_fetched_at)
+            if args.operator_app:
+                policy = resolve_app_start(coordinator, args)
+            else:
+                require(not args.operator_policy and all((args.policy, args.policy_digest, args.policy_sha,
+                                                         args.policy_ref, args.policy_fetched_at)),
+                        "legacy start requires explicit policy pins; M2 requires --operator-app and --operator-policy")
+                policy = load_policy(args.policy, expected_digest=args.policy_digest,
+                    source_ref=args.policy_ref, source_sha=args.policy_sha, fetched_at=args.policy_fetched_at)
             agent = {"launcher": str(args.agent_launcher.resolve()),
                      "worktree": str(args.worktree.resolve()), "scratch": str(args.agent_scratch.resolve()),
                      "skills_root": str(args.skills_root.resolve())}
@@ -895,6 +973,10 @@ def main(argv: list[str] | None = None) -> int:
             if not args.no_dispatch:
                 value = run_successor(coordinator, value)
         else:
+            if args.delivery_id is None:
+                active_path = coordinator._repo_dir(args.repo) / "active.json"
+                require(active_path.is_file(), "no delivery recorded for repository")
+                args.delivery_id = read_json(active_path)["delivery_id"]
             value = coordinator.load(args.repo, args.delivery_id)
             if value.get("credential_mode") == "app" and args.command in ("resume", "recover", "status"):
                 if args.command != "status":
@@ -959,7 +1041,7 @@ def main(argv: list[str] | None = None) -> int:
                     coordinator.save(value)
         print(json.dumps(value, sort_keys=True))
         return 0
-    except (DeliveryError, OSError) as exc:
+    except (RuntimeError, OSError, ValueError, KeyError, TypeError) as exc:
         print(json.dumps({"status": "blocked", "error": str(exc)}, sort_keys=True))
         return 2
 

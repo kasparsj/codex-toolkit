@@ -221,6 +221,75 @@ A hard kill can leave Spec Kit `running`. Do not edit engine files. First prove
 the old PID/process has exited, then run `recover`; it increments a linked
 attempt under the same delivery ID and reconciles intents before continuing.
 
+## Install-only onboarding (M2)
+
+Use Python 3.11 or later as `python3` on PATH (the workflow and trusted
+publisher subprocesses use it), `uvx`, and a local Docker runtime for App
+delivery. Keep the App key, profile, defaults, and state on the trusted host
+outside all agent mounts. The App must use **Only select repositories**.
+Selecting a private repository opts it in. Discovery and preview do not write
+repo refs, issues, PRs, labels, or delivery claims.
+
+Create owner-only JSON files outside the repository. The operator App profile
+has `schema_version: 1`, `host: "github.com"`, an `app` object with numeric
+`id`, `client_id`, `slug`, and numeric `bot_user_id`, an
+`allowed_account_ids` list, `private_key_path`, and the exact installation
+`permissions`: Actions/Metadata read, Contents/Issues/Pull requests write.
+Optional `publication` adds `state_dir`, `allowed_path_prefixes` (literal
+files or directory prefixes ending in slash), `ci`, and `local_verifier`.
+For local verification use a digest-pinned image, an argv list, and a map of
+audited default-branch workflow paths to SHA-256 digests. Audit how those
+workflows execute code from the candidate, including indirect script, package,
+and infrastructure inputs, before setting the path allowlist. Reserve Actions
+mode for the shipped disposable workflow profile.
+
+The operator policy is a version-1 JSON representation of the policy tables
+above. Set `delivery.final_target` and `branches.default_parent` to
+`"$default"` to resolve them from the installed repo. Set both branch
+templates to the same owned branch (e.g. `"codex/issue-{issue}"`),
+`delivery.publisher_id` to the verified App bot ID, and
+`delivery.require_github_actions` to `false` for the trusted local verifier.
+Set each approval minimum to at least one and name human numeric reviewer
+IDs. An empty reviewer list permits preview but blocks publication. Use
+`eligibility.required_labels: []` to accept routine labels and configure
+blocked, duplicate, deferred, and similar labels as exclusions. The existing
+tracking label is also excluded from new starts.
+
+An optional `.github/delivery.toml` on the pinned default branch can set
+eligibility and tracking within the protected constraints. Declare `version = 1`.
+Protected fields, if declared, must match the operator's resolved defaults.
+`_override_constraints` in the host JSON may bound `required_labels`,
+allow named `additional_excluded_labels`, or allow alternative
+`review_labels`. Repository overrides cannot remove protected exclusions.
+The runner pins policy provenance separately from the base commit and stops
+before further writes if either drifts. Do not replace pins in delivery state.
+
+```sh
+python3 workflows/github-delivery/delivery.py discover OWNER/REPO --operator-app /absolute/app.json
+python3 workflows/github-delivery/delivery.py run OWNER/REPO --preview \
+  --operator-app /absolute/app.json --operator-policy /absolute/defaults.json
+```
+
+Preview uses a separate single-repo read token, ranks oldest eligible issues
+first, and identifies issues held for unresolved PR coverage. Label exclusions,
+open blockers, open/draft links and changed-file overlaps also apply to
+`start --issue`. A verified shortlist may accompany incomplete coverage;
+there is no automatic winner until coverage is complete. For a read-only
+operator preview before the App is installed, omit `--operator-app`; this
+uses authenticated `gh` reads and reports the missing App proof.
+
+When separately authorized to deliver, use the existing `start` agent,
+worktree, skills, and state arguments, replacing `--app-config` and the
+legacy `--policy*` pins with `--operator-app` and `--operator-policy`.
+Omit `--issue` to choose the verified winner, or pass an eligible issue number.
+The protected state directory must already exist with owner-only access.
+Use `status`, `resume`, and `recover` with the repo and state directory;
+they can resolve the current delivery without an explicit delivery ID.
+The two submitted human COMMENT receipts bind to their respective draft
+revisions. The same App-authored draft is converted after implementation;
+the trusted verifier must pass before tracking. Review-ready releases the
+claim and leaves merge to humans.
+
 ## Credential boundary and live disposable smoke
 
 The agent launcher fails closed unless `DELIVERY_AGENT_ISOLATED=1`, `HOME` and

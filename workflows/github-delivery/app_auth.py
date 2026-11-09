@@ -160,8 +160,11 @@ class AppBinding:
         normalized_prefixes: list[str] = []
         for prefix in prefixes:
             delivery.require(isinstance(prefix, str) and prefix and not prefix.startswith("/")
-                             and prefix.endswith("/") and ".." not in prefix.split("/")
-                             and not prefix.lower().startswith((".github/", ".git/")) and "\x00" not in prefix,
+                             and ".." not in prefix.split("/")
+                             and all(part for part in prefix.removesuffix("/").split("/"))
+                             and not prefix.lower().startswith((".github/", ".git/"))
+                             and not prefix.lower() in {".github", ".git"}
+                             and "\x00" not in prefix and "\\" not in prefix,
                              "App allowed path prefix is invalid")
             normalized_prefixes.append(prefix)
         delivery.require(len(normalized_prefixes) == len(set(normalized_prefixes)),
@@ -265,7 +268,8 @@ class AppBinding:
                          "candidate paths must be a nonempty list")
         for path in paths:
             delivery.require(isinstance(path, str) and any(
-                path.startswith(prefix) and len(path) > len(prefix)
+                (prefix.endswith("/") and path.startswith(prefix) and len(path) > len(prefix))
+                or (not prefix.endswith("/") and path == prefix)
                 for prefix in self.allowed_path_prefixes
             ), f"candidate path is outside the App allowlist: {path!r}")
 
@@ -318,6 +322,8 @@ class GitHubAppApi:
                          "GitHub App API path or query is invalid")
         allowed_get = (
             (not query and plain_path == "/app")
+            or (plain_path == "/app/installations"
+                and GitHubAppApi._list_query(query, set()))
             or (not query and bool(re.fullmatch(r"/app/installations/[1-9][0-9]*", plain_path)))
             or (not query and bool(re.fullmatch(
                 r"/repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", plain_path)))
@@ -352,7 +358,14 @@ class GitHubAppApi:
         if not isinstance(payload, dict):
             return False
         if token_create:
-            return set(payload) == {"repository_ids", "permissions"}
+            return set(payload) in ({"permissions"}, {"repository_ids", "permissions"}) \
+                and isinstance(payload.get("permissions"), dict) \
+                and bool(payload["permissions"]) \
+                and ("repository_ids" not in payload
+                     or (isinstance(payload["repository_ids"], list)
+                         and payload["repository_ids"]
+                         and all(isinstance(value, int) and value > 0
+                                 for value in payload["repository_ids"])))
         if create_pr:
             return set(payload) == {"title", "body", "head", "base", "draft"} \
                 and payload.get("draft") is True
@@ -374,11 +387,20 @@ class GitHubAppApi:
         )
         if not query and any(re.fullmatch(pattern, path) for pattern in no_query):
             return True
-        if re.fullmatch(rf"{repo}/contents/(?:\.github/delivery\.toml|\.github/workflows|"
-                        r"\.github/workflows/[A-Za-z0-9_.-]+\.ya?ml)", path):
+        if re.fullmatch(rf"{repo}/contents(?:/\.github/(?:delivery\.toml|workflows|"
+                        r"workflows/[A-Za-z0-9_.-]+\.ya?ml))?", path):
             return set(query) == {"ref"} and bool(re.fullmatch(r"[0-9a-f]{40}", query["ref"][0]))
         if re.fullmatch(rf"{repo}/pulls", path):
-            return GitHubAppApi._list_query(query, {"state"}) and query["state"] == ["all"]
+            return GitHubAppApi._list_query(query, {"state"}) \
+                and query["state"][0] in {"all", "open"}
+        if re.fullmatch(rf"{repo}/issues", path):
+            return GitHubAppApi._list_query(query, {"state"}) and query["state"] == ["open"]
+        if re.fullmatch(rf"{repo}/pulls/[1-9][0-9]*/files", path):
+            return GitHubAppApi._list_query(query, set())
+        if re.fullmatch(rf"{repo}/issues/[1-9][0-9]*/(?:dependencies/blocked_by|timeline)", path):
+            return GitHubAppApi._list_query(query, set())
+        if re.fullmatch(rf"{repo}/rules/branches/[A-Za-z0-9_.%/-]+", path):
+            return GitHubAppApi._list_query(query, set())
         if re.fullmatch(rf"{repo}/pulls/[1-9][0-9]*/reviews", path):
             return GitHubAppApi._list_query(query, set())
         if re.fullmatch(rf"{repo}/actions/workflows/[1-9][0-9]*/runs", path):

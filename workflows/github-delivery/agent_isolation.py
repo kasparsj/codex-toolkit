@@ -146,7 +146,10 @@ def preflight(*, state: dict[str, Any], launcher: Path, worktree: Path,
                          "protected delivery state must be outside agent mounts")
         delivery.require(not _inside(Path.home().resolve(), mounted),
                          "host home must be outside agent mounts")
-        for label in ("config", "private_key_path", "publisher_root"):
+        protected_labels = ("config", "private_key_path", "publisher_root")
+        if app.get("operator_app"):
+            protected_labels += ("operator_app", "operator_policy")
+        for label in protected_labels:
             raw_protected = app.get(label)
             delivery.require(isinstance(raw_protected, str) and Path(raw_protected).is_absolute(),
                              f"protected App {label} path must be absolute")

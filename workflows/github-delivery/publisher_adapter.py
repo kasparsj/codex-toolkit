@@ -22,6 +22,10 @@ def call_launcher(launcher: Path, packet: dict, *, app: dict | None = None) -> d
                if key in os.environ}
         env.update(DELIVERY_APP_CONFIG=app["config"], DELIVERY_PUBLISHER_ROOT=app["publisher_root"],
                    DELIVERY_PUBLISHER_REPO=packet["target_repo"])
+        if app.get("operator_app"):
+            env.update(DELIVERY_OPERATOR_APP=app["operator_app"],
+                       DELIVERY_OPERATOR_APP_DIGEST=app["operator_app_digest"],
+                       DELIVERY_OPERATOR_POLICY=app["operator_policy"])
     env["DELIVERY_PUBLISHER_ISOLATED"] = "1"
     completed = subprocess.run([str(launcher)], input=json.dumps(packet), text=True,
                                capture_output=True, env=env, check=False)
