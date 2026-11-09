@@ -19,6 +19,7 @@ inputs:
   run_implementation: {type: boolean, required: true}
   publish_implementation: {type: boolean, required: true}
   finalize: {type: boolean, required: true}
+  agent_closeout: {type: boolean, default: true}
   plan_gate: {type: boolean, required: true}
   implementation_gate: {type: boolean, required: true}
   plan_verdict: {type: string, enum: ["", approve, reject], default: ""}
@@ -189,7 +190,7 @@ steps:
           python3 "$DELIVERY_ADAPTER_DIR/publisher_adapter.py" finalize --state-dir "$DELIVERY_STATE_DIR" --repo "$DELIVERY_REPO" --delivery-id "$DELIVERY_ID" --launcher "$DELIVERY_PUBLISHER_LAUNCHER"
   - id: dispatch-closeout
     type: if
-    condition: "{{ steps.post-rank-status.output.data.status != 'completed' }}"
+    condition: "{{ inputs.agent_closeout and steps.post-rank-status.output.data.status != 'completed' }}"
     then:
       - id: closeout
         type: shell

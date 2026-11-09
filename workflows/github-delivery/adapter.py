@@ -16,6 +16,7 @@ import subprocess
 import sys
 
 import delivery
+import agent_isolation
 
 
 SKILL_FOR_KIND = {"rank": "next-issue", "plan": "plan-pr",
@@ -23,7 +24,7 @@ SKILL_FOR_KIND = {"rank": "next-issue", "plan": "plan-pr",
 ALLOWED_STATUS = {"rank": {"claimed", "rank_required", "plan_required"},
                   "plan": {"plan_required", "plan_review"},
                   "implement": {"implementation_required", "implementation_review", "publication_pending"},
-                  "closeout": {"review_ready", "ci_waiting", "blocked"}}
+                  "closeout": {"github_ready", "review_ready", "ci_waiting", "blocked"}}
 
 
 def isolated_env(scratch: Path) -> dict[str, str]:
@@ -51,21 +52,48 @@ def run_agent(*, launcher: Path, kind: str, state: dict, skills_root: Path,
 
         _, verdict = check_approval(state, Path(state["publisher_launcher"]), "plan")
         delivery.require(verdict == "approve", "current plan approval required before implementation")
+    app_mode = state.get("credential_mode") == "app"
+    profile = None
+    packet_worktree = worktree
+    packet_scratch = scratch
+    packet_skill_path = skill_path
+    if app_mode:
+        profile = agent_isolation.preflight(state=state, launcher=launcher, worktree=worktree,
+            scratch=scratch, skills_root=skills_root)
+        packet_worktree = agent_isolation.CONTAINER_WORKTREE
+        packet_scratch = agent_isolation.CONTAINER_SCRATCH
+        packet_skill_path = agent_isolation.CONTAINER_SKILLS / skill / "SKILL.md"
     packet = {"schema_version": 1, "kind": kind, "delivery_id": state["delivery_id"],
               "repo": state["repo"], "issue": state.get("issue"), "status": state["status"],
-              "skill": {"name": skill, "path": str(skill_path),
+              "skill": {"name": skill, "path": str(packet_skill_path),
                         "sha256": delivery.digest_bytes(skill_path.read_bytes()),
                         "package_sha256": current_hashes[skill]},
-              "worktree": str(worktree), "scratch": str(scratch),
+              "worktree": str(packet_worktree), "scratch": str(packet_scratch),
               "policy": state["policy_values"],
               "plan": state.get("manifests", {}).get("plan", {}).get("value"),
               "publication": state.get("publication", {}),
               "instruction": "Load the exact pinned skill. Keep GitHub read-only. Return only its delivery manifest."}
     if kind in ("plan", "implement"):
-        packet["candidate_bundle"] = str(scratch / "candidate.bundle")
+        packet["candidate_bundle"] = str(packet_scratch / "candidate.bundle")
         packet["candidate_ref"] = "refs/heads/delivery-candidate"
-    completed = subprocess.run([str(launcher)], input=json.dumps(packet), text=True, capture_output=True,
-                               cwd=worktree, env=isolated_env(scratch), check=False)
+    if app_mode:
+        packet["read_snapshot"] = {"path": str(agent_isolation.CONTAINER_SNAPSHOT),
+                                   "sha256": profile["snapshot_sha256"]}
+        packet["instruction"] += " Use only DELIVERY_READ_SNAPSHOT for GitHub reads. Network is unavailable."
+        if kind == "implement":
+            packet["instruction"] += (
+                " Start implementation at the exact reviewed plan revision in this checkout."
+                " Export a complete bundle whose candidate extends that revision."
+                " Report changed paths against the pinned default-branch base."
+            )
+        argv = agent_isolation.command(profile=profile, launcher=launcher, worktree=worktree,
+            scratch=scratch, skills_root=skills_root)
+        env = profile["env"]
+    else:
+        argv = [str(launcher)]
+        env = isolated_env(scratch)
+    completed = subprocess.run(argv, input=json.dumps(packet), text=True, capture_output=True,
+                               cwd=worktree, env=env, check=False)
     if completed.returncode:
         raise delivery.DeliveryError(f"agent launcher failed: {completed.stderr.strip()}")
     try: manifest = json.loads(completed.stdout)
@@ -84,9 +112,20 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     try:
         coordinator = delivery.Coordinator(args.state_dir); state = coordinator.load(args.repo, args.delivery_id)
-        manifest = run_agent(launcher=args.launcher.resolve(), kind=args.kind, state=state,
-            skills_root=args.skills_root.resolve(), worktree=args.worktree, scratch=args.scratch)
-        state = coordinator.accept_manifest(state, manifest)
+        with coordinator.runner_step(state) as state:
+            if state.get("credential_mode") == "app":
+                persisted = state["agent"]
+                supplied = {"launcher": str(args.launcher.resolve()),
+                            "worktree": str(args.worktree.resolve()),
+                            "skills_root": str(args.skills_root.resolve())}
+                delivery.require(all(persisted.get(key) == value for key, value in supplied.items()),
+                                 "App adapter arguments differ from protected delivery state")
+                expected_scratch = (Path(persisted["scratch"]) / args.kind).resolve()
+                delivery.require(args.scratch.resolve() == expected_scratch,
+                                 "App adapter scratch differs from protected delivery state")
+            manifest = run_agent(launcher=args.launcher.resolve(), kind=args.kind, state=state,
+                skills_root=args.skills_root.resolve(), worktree=args.worktree, scratch=args.scratch)
+            state = coordinator.accept_manifest(state, manifest)
         print(json.dumps({"status": state["status"], "manifest_digest":
               state["manifests"][args.kind]["digest"]}, sort_keys=True)); return 0
     except (delivery.DeliveryError, OSError) as exc:

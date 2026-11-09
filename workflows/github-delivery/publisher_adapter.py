@@ -12,10 +12,16 @@ import subprocess
 import delivery
 
 
-def call_launcher(launcher: Path, packet: dict) -> dict:
+def call_launcher(launcher: Path, packet: dict, *, app: dict | None = None) -> dict:
     delivery.require(launcher.is_file() and os.access(launcher, os.X_OK),
                      "publisher launcher must be executable")
-    env = dict(os.environ)
+    if app is None:
+        env = dict(os.environ)
+    else:
+        env = {key: os.environ[key] for key in ("PATH", "DELIVERY_PUBLISHER_FAULT_AFTER")
+               if key in os.environ}
+        env.update(DELIVERY_APP_CONFIG=app["config"], DELIVERY_PUBLISHER_ROOT=app["publisher_root"],
+                   DELIVERY_PUBLISHER_REPO=packet["target_repo"])
     env["DELIVERY_PUBLISHER_ISOLATED"] = "1"
     completed = subprocess.run([str(launcher)], input=json.dumps(packet), text=True,
                                capture_output=True, env=env, check=False)
@@ -24,7 +30,8 @@ def call_launcher(launcher: Path, packet: dict) -> dict:
             detail = json.loads(completed.stdout).get("error")
         except (AttributeError, json.JSONDecodeError):
             detail = None
-        raise delivery.DeliveryError(f"publisher launcher failed: {detail or completed.stderr.strip()}")
+        diagnostic = detail or ("App publisher interrupted" if app else completed.stderr.strip())
+        raise delivery.DeliveryError(f"publisher launcher failed: {diagnostic}")
     try: result = json.loads(completed.stdout)
     except json.JSONDecodeError as exc: raise delivery.DeliveryError("publisher launcher emitted invalid JSON") from exc
     delivery.require(isinstance(result, dict) and result.get("schema_version") == 1,
@@ -33,16 +40,32 @@ def call_launcher(launcher: Path, packet: dict) -> dict:
     return result
 
 
-def call_mutation(state: dict, launcher: Path, packet: dict, save, validate) -> dict:
+def call_mutation(state: dict, launcher: Path, packet: dict, save, validate, *, transport_options=None) -> dict:
     op_id = delivery.digest_bytes(delivery.canonical_json(packet))[:20]
+    if packet.get("credential_mode") == "app" and packet["action"] == "finalize" and state["status"] == "tracking_pending":
+        # A verified binding upgrade can change the credential digest after mark-ready.
+        # Resume the original write intents only when every other request field matches.
+        pending = [item for item in state["operations"]
+                   if item["kind"] == "finalize" and item["status"] == "intent"]
+        delivery.require(len(pending) == 1, "tracking requires one pending finalization intent")
+        recorded = pending[0]["payload"]
+        previous = {key: value for key, value in recorded.items()
+                    if key not in {"operation_id", "app_binding_digest"}}
+        current = {key: value for key, value in packet.items() if key != "app_binding_digest"}
+        delivery.require(previous == current, "tracking request differs from the pending finalization intent")
+        op_id = pending[0]["id"]
     packet = {**packet, "operation_id": op_id}
     operation = next((item for item in state["operations"] if item["id"] == op_id), None)
     if operation is None:
         operation = {"id": op_id, "kind": packet["action"], "payload": packet,
                      "status": "intent", "recorded_at": delivery.utc_now()}
         state["operations"].append(operation); save(state)
-    response = call_launcher(launcher, packet)
+    response = call_launcher(launcher, {**packet, **(transport_options or {})},
+                             **({"app": state["app"]} if "app" in state else {}))
     validate(response)
+    if state.get("credential_mode") == "app" and packet["action"] == "finalize" and (
+            response.get("status") != "review_ready"):
+        return response
     operation["status"] = "completed"; operation["receipt"] = response
     operation["completed_at"] = delivery.utc_now(); save(state)
     return response
@@ -68,6 +91,10 @@ def expected_publication(state: dict, stage: str) -> dict:
                      f"{stage} base repository mismatch")
     delivery.require(result.get("issue") == issue, f"{stage} issue mismatch")
     delivery.validate_ref(base)
+    if state.get("credential_mode") == "app":
+        delivery.require(base == delivery.policy_branch(state["policy"]["ref"])
+                         and base_sha == state["policy"]["sha"],
+                         "App candidate differs from the pinned default-branch revision")
     branches = policy["branches"]
     prefixes = branches.get("allowed_parent_prefixes", [])
     delivery.require(base == branches["default_parent"] or
@@ -92,9 +119,12 @@ def validate_pr(pr: dict, expected: dict, *, draft: bool) -> None:
 
 
 def packet_for(state: dict, action: str) -> dict:
-    return {"schema_version": 1, "action": action, "delivery_id": state["delivery_id"],
-            "target_repo": state["repo"], "policy": state["policy"],
-            "policy_values": state["policy_values"]}
+    packet = {"schema_version": 1, "action": action, "delivery_id": state["delivery_id"],
+              "target_repo": state["repo"], "policy": state["policy"],
+              "policy_values": state["policy_values"]}
+    if state.get("credential_mode") == "app":
+        packet.update(credential_mode="app", app_binding_digest=state["app"]["digest"], issue=state["issue"])
+    return packet
 
 
 def publish(state: dict, launcher: Path, stage: str, save=lambda _state: None) -> dict:
@@ -124,8 +154,15 @@ def publish(state: dict, launcher: Path, stage: str, save=lambda _state: None) -
               "candidate": {"bundle_path": str(bundle), "paths": manifest["artifact_paths"],
                             "hashes": manifest.get("artifact_hashes")},
               "plan_approval": approval_request(state, "plan") if stage == "implementation" else None}
-    response = call_mutation(state, launcher, packet, save,
-                             lambda result: validate_pr(result.get("pr", {}), expected, draft=True))
+    def validate(result: dict) -> None:
+        pr = result.get("pr", {})
+        validate_pr(pr, expected, draft=True)
+        if state.get("credential_mode") == "app" and stage == "implementation":
+            delivery.require(pr["number"] == packet["prior_pr"]["number"]
+                             and pr["node_id"] == packet["prior_pr"]["node_id"],
+                             "App implementation must reuse the planning draft")
+
+    response = call_mutation(state, launcher, packet, save, validate)
     state.setdefault("publication", {})[stage] = {"pr": response["pr"], "published_at": delivery.utc_now(),
         "generation": expected["generation"], "manifest_digest": expected["manifest_digest"]}
     if correction is not None:
@@ -192,14 +229,14 @@ def check_approval(state: dict, launcher: Path, stage: str) -> tuple[dict, str]:
     packet = {**packet_for(state, "list_reviews"),
               "stage": stage, "pr": pr, "context_digest": context,
               "generation": state["manifests"]["plan" if stage == "plan" else "implement"]["generation"]}
-    response = call_launcher(launcher, packet)
+    response = call_launcher(launcher, packet, **({"app": state["app"]} if "app" in state else {}))
     delivery.require(response.get("paginated") is True, "publisher did not prove review pagination")
     validate_pr(response.get("pr", {}), pr, draft=True)
     config = state["policy_values"]["approvals"][stage]
     verdict = delivery.evaluate_reviews(response.get("reviews", []), stage=stage,
         generation=packet["generation"], context_digest=context, commit_id=commit_id,
         authorized_ids=config["reviewer_ids"], publisher_id=state["policy_values"]["delivery"]["publisher_id"],
-        minimum=state["requirements"][stage])
+        minimum=state["requirements"][stage], require_human=state.get("credential_mode") == "app")
     state.setdefault("receipts", {})[stage] = {**verdict, "context_digest": context,
         "commit_id": commit_id, "checked_at": delivery.utc_now()}
     if verdict["approved"]: return state, "approve"
@@ -208,7 +245,9 @@ def check_approval(state: dict, launcher: Path, stage: str) -> tuple[dict, str]:
 
 
 def finalize(state: dict, launcher: Path, save=lambda _state: None) -> dict:
-    delivery.require(state["status"] == "publication_pending", "finalize is out of order")
+    app = state.get("credential_mode") == "app"
+    allowed = delivery.APP_FINALIZING if app else {"publication_pending"}
+    delivery.require(state["status"] in allowed, "finalize is out of order")
     receipt = state.get("receipts", {}).get("implementation", {})
     delivery.require(state["requirements"]["implementation"] == 0 or receipt.get("approved") is True,
                      "implementation approval missing")
@@ -222,15 +261,47 @@ def finalize(state: dict, launcher: Path, save=lambda _state: None) -> dict:
               "prior_pr": state.get("publication", {}).get("plan", {}).get("pr"),
               "approval": approval_request(state, "implementation"),
               "plan_approval": approval_request(state, "plan")}
+    deferred_head = state.get("actions_deferred_head") if app else None
+    if deferred_head is not None:
+        delivery.require(deferred_head == publication["pr"]["head_sha"],
+                         "Actions deferral is for a different implementation revision")
+        packet["actions_deferred_head"] = deferred_head
 
     def validate(result: dict) -> None:
+        if app:
+            status = result.get("status")
+            delivery.require(status in (delivery.APP_FINALIZING - {"publication_pending"}) | {"review_ready"},
+                             "invalid trusted App finalization state")
+            validate_pr(result.get("pr", {}), publication["pr"], draft=status.startswith("pre_ready"))
+            if status != "review_ready":
+                return
+            ci = result.get("ci", {})
+            if deferred_head is not None:
+                delivery.require(ci.get("status") == "deferred" and ci.get("head_sha") == deferred_head,
+                                 "trusted Actions deferral readback required")
+            else:
+                delivery.require(ci.get("status") == "success", "successful trusted CI readback required")
         validate_pr(result.get("pr", {}), publication["pr"], draft=False)
         issue = result.get("issue", {})
         delivery.require(issue.get("number") == state["issue"], "issue readback mismatch")
         delivery.require(label in issue.get("labels", []), "review label readback missing")
 
-    response = call_mutation(state, launcher, packet, save, validate)
-    state["status"] = "review_ready"; state["publication"]["final"] = response
+    if app and state["status"] != "tracking_pending":
+        response = call_mutation(state, launcher, packet, save, validate,
+                                 transport_options={"checkpoint_tracking": True})
+        if response["status"] == "tracking_pending":
+            state["status"] = "tracking_pending"
+            state["publication"]["progress"] = response
+            save(state)
+            response = call_mutation(state, launcher, packet, save, validate)
+    else:
+        response = call_mutation(state, launcher, packet, save, validate)
+    state["status"] = response["status"] if app else "github_ready"
+    if app:
+        state["publication"]["progress"] = response
+    if not app or state["status"] == "review_ready":
+        state["publication"]["final"] = response
+    save(state)
     return state
 
 
@@ -243,14 +314,21 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     try:
         coordinator = delivery.Coordinator(args.state_dir); state = coordinator.load(args.repo, args.delivery_id)
-        if args.command.startswith("publish-"):
-            state = publish(state, args.launcher.resolve(), args.command.removeprefix("publish-"), coordinator.save)
-            verdict = None
-        elif args.command.startswith("check-"):
-            state, verdict = check_approval(state, args.launcher.resolve(), args.command.removeprefix("check-"))
-        else:
-            state = finalize(state, args.launcher.resolve(), coordinator.save); verdict = None
-        coordinator.save(state); print(json.dumps({"status": state["status"], "verdict": verdict}, sort_keys=True)); return 0
+        with coordinator.runner_step(state) as state:
+            if state.get("credential_mode") == "app":
+                delivery.require(args.launcher.resolve() == Path(state["publisher_launcher"]),
+                                 "App publisher launcher differs from protected state")
+            if args.command.startswith("publish-"):
+                state = publish(state, args.launcher.resolve(), args.command.removeprefix("publish-"), coordinator.save)
+                verdict = None
+            elif args.command.startswith("check-"):
+                state, verdict = check_approval(state, args.launcher.resolve(), args.command.removeprefix("check-"))
+            else:
+                state = finalize(state, args.launcher.resolve(), coordinator.save)
+                verdict = None
+            coordinator.save(state)
+        print(json.dumps({"status": state["status"], "verdict": verdict}, sort_keys=True))
+        return 0
     except (delivery.DeliveryError, OSError) as exc:
         print(json.dumps({"status": "blocked", "error": str(exc)}, sort_keys=True)); return 2
 

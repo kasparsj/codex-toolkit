@@ -9,11 +9,11 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import patch
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 
 ROOT = Path(__file__).parents[1]
-for name in ("delivery", "trusted_git", "publisher", "publisher_adapter"):
+for name in ("delivery", "app_auth", "trusted_git", "publisher", "publisher_adapter"):
     spec = importlib.util.spec_from_file_location(name, ROOT / f"{name}.py")
     module = importlib.util.module_from_spec(spec)
     assert spec.loader
@@ -85,7 +85,7 @@ class FakeClient:
             self.mutations.append(("edit", number))
             return self.prs[number]
         if "/labels/" in endpoint and method == "GET":
-            return {"name": endpoint.rsplit("/", 1)[1]}
+            return {"name": unquote(endpoint.rsplit("/", 1)[1])}
         if endpoint.endswith("/issues/42/labels") and method == "POST":
             self.issue_labels.update(payload["labels"])
             self.mutations.append(("label", tuple(payload["labels"])))

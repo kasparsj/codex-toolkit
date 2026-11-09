@@ -8,6 +8,8 @@ import hashlib
 import json
 import os
 from pathlib import Path
+from pathlib import PurePosixPath
+import re
 import subprocess
 import sys
 import tomllib
@@ -15,6 +17,7 @@ from typing import Any
 from urllib.parse import quote, urlencode
 
 import delivery
+from app_auth import AppAuthenticator, AppBinding
 from trusted_git import TrustedGit
 
 
@@ -85,7 +88,7 @@ class GitHubClient:
 
 class Publisher:
     def __init__(self, *, repo: str, root: Path, client: GitHubClient,
-                 git_factory=TrustedGit):
+                 git_factory=TrustedGit, app_session=None):
         self.repo = canonical_repo(repo)
         delivery.require(not root.is_symlink(), "trusted publisher root is invalid")
         self.root = root.resolve()
@@ -100,11 +103,21 @@ class Publisher:
         )
         self.client = client
         self.git_factory = git_factory
+        self.app_session = app_session
+        self.publisher_lock_fd: int | None = None
         self.issue_digest: str | None = None
         _, owner, name = repo_parts(self.repo)
         self.canonical_url = f"https://github.com/{owner}/{name}.git"
 
     def execute(self, packet: dict[str, Any]) -> dict[str, Any]:
+        with delivery.mutex(self.root / ".publisher.lock") as lock_fd:
+            self.publisher_lock_fd = lock_fd
+            try:
+                return self._execute_locked(packet)
+            finally:
+                self.publisher_lock_fd = None
+
+    def _execute_locked(self, packet: dict[str, Any]) -> dict[str, Any]:
         delivery.require(packet.get("schema_version") == 1, "invalid publisher packet schema")
         delivery.require(
             canonical_repo(packet.get("target_repo", "")) == self.repo,
@@ -112,13 +125,26 @@ class Publisher:
         )
         action = packet.get("action")
         delivery.require(
-            action in {"publish_plan", "publish_implementation", "list_reviews", "finalize"},
+            action in {"preflight", "publish_plan", "publish_implementation", "list_reviews", "finalize"},
             "unsupported publisher action",
         )
         self._verify_policy(packet)
+        if action == "preflight":
+            self._verify_actor(packet)
+            return self._preflight(packet)
         if action == "list_reviews":
+            if packet.get("credential_mode") == "app":
+                self._verify_actor(packet)
             return self._list_reviews(packet)
         self._verify_actor(packet)
+        if packet.get("credential_mode") == "app":
+            expected = packet["expected"]
+            delivery.require(
+                expected.get("base") == delivery.policy_branch(packet["policy"]["ref"])
+                and expected.get("base_sha") == packet["policy"]["sha"]
+                and expected.get("issue") == packet.get("issue"),
+                "App mutation does not match the pinned base and issue",
+            )
         issue = self._verify_issue(packet)
         self.issue_digest = hashlib.sha256(
             delivery.canonical_json({"title": issue.get("title", ""), "body": issue.get("body", "")})
@@ -128,6 +154,21 @@ class Publisher:
         return self._finalize(packet)
 
     def _verify_actor(self, packet: dict[str, Any]) -> None:
+        if packet.get("credential_mode") == "app":
+            delivery.require(self.app_session is not None, "App session is unavailable")
+            binding = self.app_session.binding
+            digest = getattr(binding, "digest", None)
+            if callable(digest):
+                digest = digest()
+            delivery.require(packet.get("app_binding_digest") == digest,
+                             "packet App binding digest mismatch")
+            delivery.require(binding.repository.lower() == "/".join(repo_parts(self.repo)[1:]),
+                             "App binding repository mismatch")
+            delivery.require(
+                packet["policy_values"]["delivery"]["publisher_id"] == binding.bot_user_id,
+                "policy publisher is not the bound App bot",
+            )
+            return
         user = self.client.api("GET", self.repo, "/user")
         expected = packet["policy_values"]["delivery"]["publisher_id"]
         delivery.require(user.get("id") == expected, "authenticated actor is not the policy publisher")
@@ -169,10 +210,16 @@ class Publisher:
         except (UnicodeDecodeError, tomllib.TOMLDecodeError) as exc:
             raise delivery.DeliveryError("live policy is not valid TOML") from exc
         supplied = packet.get("policy_values", {})
-        delivery.require(
-            all(supplied.get(key) == value for key, value in parsed.items()),
-            "packet policy values do not match the trusted policy",
-        )
+        if packet.get("credential_mode") == "app":
+            source = supplied.get("_source")
+            values = {key: value for key, value in supplied.items() if key != "_source"}
+            delivery.require(values == parsed and source == policy,
+                             "packet policy values do not exactly match the trusted policy")
+        else:
+            delivery.require(
+                all(supplied.get(key) == value for key, value in parsed.items()),
+                "packet policy values do not match the trusted policy",
+            )
 
     def _verify_issue(self, packet: dict[str, Any]) -> dict[str, Any]:
         issue_number = packet.get("issue") or packet.get("expected", {}).get("issue")
@@ -194,7 +241,163 @@ class Publisher:
             not labels.intersection(eligibility.get("excluded_labels", [])),
             "source issue has an excluded label",
         )
+        if packet.get("initial"):
+            delivery.require(not labels, "initial source issue must be unlabeled")
         return issue
+
+    def _identity_evidence(self) -> dict[str, Any]:
+        delivery.require(self.app_session is not None, "App session is unavailable")
+        return self.app_session.identity_evidence()
+
+    def _preflight(self, packet: dict[str, Any]) -> dict[str, Any]:
+        delivery.require(packet.get("credential_mode") == "app",
+                         "preflight requires GitHub App credentials")
+        issue = self._verify_issue(packet)
+        binding = self.app_session.binding
+        repository = self.client.api("GET", self.repo, "/repos/{owner}/{repo}")
+        delivery.require(
+            repository.get("id") == binding.repository_id
+            and str(repository.get("full_name", "")).lower() == binding.repository.lower()
+            and repository.get("private") is True,
+            "repository identity or privacy differs from the App binding",
+        )
+        default_branch = repository.get("default_branch")
+        policy = packet["policy_values"]
+        delivery.require(
+            policy["eligibility"].get("required_labels") == []
+            and policy["branches"]["plan_template"]
+            == policy["branches"]["implementation_template"]
+            and all(
+                policy["approvals"][stage].get("minimum") == 1
+                and len(policy["approvals"][stage].get("reviewer_ids", [])) == 1
+                for stage in ("plan", "implementation")
+            ),
+            "disposable M1 policy does not match the reviewed gate profile",
+        )
+        delivery.require(
+            isinstance(default_branch, str)
+            and policy["branches"]["default_parent"] == default_branch
+            and policy["delivery"]["final_target"] == default_branch
+            and delivery.policy_branch(packet["policy"]["ref"]) == default_branch,
+            "policy and repository default branches differ",
+        )
+        protection = self.client.api(
+            "GET", self.repo,
+            f"/repos/{{owner}}/{{repo}}/branches/{quote(default_branch, safe='')}",
+        )
+        branch_protected = protection.get("protected")
+        delivery.require(isinstance(branch_protected, bool),
+                         "GitHub default branch protection status is unreadable")
+        label = policy.get("tracking", {}).get("review_label")
+        delivery.require(isinstance(label, str) and label, "App policy review label is missing")
+        existing_label = self.client.api(
+            "GET", self.repo, f"/repos/{{owner}}/{{repo}}/labels/{quote(label, safe='')}",
+        )
+        delivery.require(existing_label.get("name") == label, "App policy review label differs from GitHub")
+        workflow = self.client.api(
+            "GET", self.repo,
+            f"/repos/{{owner}}/{{repo}}/actions/workflows/{binding.ci['workflow_id']}",
+        )
+        delivery.require(
+            workflow.get("id") == binding.ci["workflow_id"]
+            and workflow.get("path") == binding.ci["workflow_path"]
+            and workflow.get("state") == "active",
+            "trusted CI workflow differs from the App binding",
+        )
+        workflows = self.client.paginated(
+            self.repo, "/repos/{owner}/{repo}/actions/workflows?per_page=100",
+        )
+        active_workflows = [item for item in workflows if item.get("state") == "active"]
+        delivery.require(
+            len(active_workflows) == 1
+            and active_workflows[0].get("id") == binding.ci["workflow_id"],
+            "disposable repository must have exactly one active trusted workflow",
+        )
+        workflow_content = self.client.api(
+            "GET", self.repo,
+            f"/repos/{{owner}}/{{repo}}/contents/{binding.ci['workflow_path']}?"
+            f"{urlencode({'ref': packet['policy']['sha']})}",
+        )
+        delivery.require(workflow_content.get("encoding") == "base64",
+                         "trusted CI workflow encoding is unsupported")
+        try:
+            workflow_bytes = base64.b64decode(
+                "".join(workflow_content["content"].split()), validate=True,
+            )
+        except (KeyError, ValueError) as exc:
+            raise delivery.DeliveryError("trusted CI workflow content is invalid") from exc
+        expected_workflow_digest = binding.ci.get("workflow_sha256")
+        delivery.require(
+            isinstance(expected_workflow_digest, str)
+            and hashlib.sha256(workflow_bytes).hexdigest() == expected_workflow_digest,
+            "trusted CI workflow digest differs from the App binding",
+        )
+        fixture = Path(__file__).resolve().parent / "fixtures" / "delivery-fixture.yml"
+        delivery.require(workflow_bytes == fixture.read_bytes() and binding.ci["required_job"] == "verify-fixture",
+                         "trusted CI must match the shipped M1 fixture workflow")
+        reviewer_ids = sorted({
+            reviewer_id
+            for stage in ("plan", "implementation")
+            for reviewer_id in policy["approvals"][stage]["reviewer_ids"]
+        })
+        reviewers = []
+        for reviewer_id in reviewer_ids:
+            user = self.client.api("GET", self.repo, f"/user/{reviewer_id}")
+            delivery.require(user.get("id") == reviewer_id and user.get("type") == "User",
+                             "configured reviewer is not a human account")
+            reviewers.append({"id": reviewer_id, "login": user.get("login"), "type": "User"})
+        issue_number = issue["number"]
+        pulls = self.client.paginated(
+            self.repo, "/repos/{owner}/{repo}/pulls?state=all&per_page=100",
+        )
+        sanitized_pulls = [{
+            "number": value.get("number"),
+            "state": value.get("state"),
+            "draft": value.get("draft"),
+            "head": value.get("head", {}).get("ref"),
+            "head_sha": value.get("head", {}).get("sha"),
+            "base": value.get("base", {}).get("ref"),
+            "author_id": value.get("user", {}).get("id"),
+        } for value in pulls]
+        owned_branch = policy["branches"]["plan_template"].format(issue=issue_number)
+        delivery.require(owned_branch != default_branch,
+                         "App delivery branch must differ from the default branch")
+        for pull in sanitized_pulls:
+            if pull["head"] != owned_branch:
+                continue
+            if packet.get("initial"):
+                raise delivery.DeliveryError("owned delivery branch already has a pull request")
+            raw = next(value for value in pulls if value.get("number") == pull["number"])
+            delivery.require(
+                f"delivery-id: {packet['delivery_id']}" in (raw.get("body") or ""),
+                "owned delivery branch has a conflicting pull request",
+            )
+        return {
+            "schema_version": 1,
+            "action": "preflight",
+            "identity": {**self._identity_evidence(), "default_branch_protected": branch_protected},
+            "snapshot": {
+                "schema_version": 1,
+                "repo": packet["target_repo"],
+                "repository": {"id": binding.repository_id,
+                               "full_name": binding.repository,
+                               "private": True, "default_branch": default_branch,
+                               "protected": branch_protected},
+                "source": {"ref": packet["policy"]["ref"],
+                           "sha": packet["policy"]["sha"]},
+                "issues": [{
+                    "number": issue_number,
+                    "title": issue.get("title", ""),
+                    "body": issue.get("body", ""),
+                    "state": issue.get("state"),
+                    "labels": sorted(item.get("name") for item in issue.get("labels", [])
+                                     if item.get("name")),
+                }],
+                "pull_requests": sanitized_pulls,
+                "reviewers": reviewers,
+                "fetched_at": delivery.utc_now(),
+            },
+        }
 
     def _base_tip(self, expected: dict[str, Any]) -> str:
         branch = expected["base"]
@@ -226,7 +429,170 @@ class Publisher:
             "draft": value["draft"],
             "body": value.get("body") or "",
             "state": value["state"].upper(),
+            "author_id": value.get("user", {}).get("id"),
+            "author_type": value.get("user", {}).get("type"),
+            "author_login": value.get("user", {}).get("login"),
+            "head_repo_id": value.get("head", {}).get("repo", {}).get("id"),
+            "base_repo_id": value.get("base", {}).get("repo", {}).get("id"),
+            "performed_via_github_app": value.get("performed_via_github_app"),
         }
+
+    def _verify_app_pr_author(self, packet: dict[str, Any], pr: dict[str, Any]) -> None:
+        if packet.get("credential_mode") != "app":
+            return
+        delivery.require(self.app_session is not None, "App session is unavailable")
+        binding = self.app_session.binding
+        expected = binding.bot_user_id
+        delivery.require(isinstance(expected, int) and expected > 0,
+                         "App binding is missing the bot user ID")
+        delivery.require(
+            pr.get("author_id") == expected
+            and pr.get("author_type") == "Bot"
+            and str(pr.get("author_login", "")).lower() == binding.bot_login.lower(),
+            "pull request was not authored by the bound GitHub App bot",
+        )
+        for key in ("head_repo_id", "base_repo_id"):
+            if pr.get(key) is not None:
+                delivery.require(pr[key] == binding.repository_id,
+                                 "pull request repository ID differs from the App binding")
+        provenance = pr.get("performed_via_github_app")
+        if provenance is not None:
+            delivery.require(
+                provenance.get("id") == binding.app_id
+                and provenance.get("slug") == binding.app_slug,
+                "pull request GitHub App provenance differs from the binding",
+            )
+
+    def _intent_path(self, packet: dict[str, Any], operation: str) -> Path:
+        delivery.validate_delivery_id(packet["delivery_id"])
+        generation = packet.get("expected", {}).get("generation")
+        delivery.require(isinstance(generation, int) and generation > 0,
+                         "publisher intent generation is invalid")
+        delivery.require(operation in {"push", "pr_create", "pr_update", "ready", "label"},
+                         "publisher intent operation is invalid")
+        action = packet.get("action")
+        operation_id = packet.get("operation_id")
+        if packet.get("credential_mode") == "app":
+            delivery.require(
+                isinstance(operation_id, str) and re.fullmatch(r"[0-9a-f]{20}", operation_id),
+                "App publisher operation ID is invalid",
+            )
+        else:
+            operation_id = operation_id or action
+        delivery.require(isinstance(action, str) and "/" not in action
+                         and isinstance(operation_id, str) and "/" not in operation_id,
+                         "publisher intent identity is invalid")
+        name = f"{action}-{operation_id}-g{generation}-{operation}.json"
+        return self.root / "intents" / packet["delivery_id"] / name
+
+    def _record_intent(self, packet: dict[str, Any], operation: str,
+                       before: dict[str, Any], after: dict[str, Any]) -> None:
+        path = self._intent_path(packet, operation)
+        value = {
+            "schema_version": 1,
+            "repo": self.repo,
+            "delivery_id": packet["delivery_id"],
+            "generation": packet.get("expected", {}).get("generation"),
+            "operation": operation,
+            "operation_id": packet.get("operation_id") or packet.get("action"),
+            "action": packet.get("action"),
+            "actor_id": (self.app_session.binding.bot_user_id if self.app_session is not None
+                         else packet["policy_values"]["delivery"]["publisher_id"]),
+            "issue": packet.get("issue") or packet.get("expected", {}).get("issue"),
+            "expected": {
+                key: packet.get("expected", {}).get(key)
+                for key in ("repo", "issue", "head", "head_sha", "base", "base_sha")
+            },
+            "before": before,
+            "after": after,
+            "status": "pending",
+            "recorded_at": delivery.utc_now(),
+        }
+        if path.exists():
+            existing = delivery.read_json(path)
+            comparable = {key: value[key] for key in (
+                "schema_version", "repo", "delivery_id", "generation", "operation",
+                "operation_id", "action", "actor_id", "issue", "expected", "before", "after",
+            )}
+            delivery.require(
+                existing.get("status") == "pending"
+                and all(existing.get(key) == item for key, item in comparable.items()),
+                "publisher intent scope conflicts with durable history",
+            )
+            return
+        delivery.atomic_json(path, value)
+
+    def _require_adoptable_intent(self, packet: dict[str, Any], operation: str,
+                                  after: dict[str, Any]) -> None:
+        path = self._intent_path(packet, operation)
+        delivery.require(path.exists(), f"remote {operation} state has no durable publisher intent")
+        intent = delivery.read_json(path)
+        delivery.require(
+            intent.get("status") in {"pending", "checkpointed"}
+            and intent.get("repo") == self.repo
+            and intent.get("operation_id") == packet.get("operation_id")
+            and intent.get("action") == packet.get("action")
+            and intent.get("after") == after,
+            f"remote {operation} state conflicts with durable publisher intent",
+        )
+
+    def _checkpoint_intent(self, packet: dict[str, Any], operation: str,
+                           observed: dict[str, Any]) -> None:
+        path = self._intent_path(packet, operation)
+        intent = delivery.read_json(path)
+        delivery.require(intent.get("operation") == operation and intent.get("status") == "pending",
+                         "publisher intent changed before checkpoint")
+        after = intent.get("after", {})
+        if operation == "push":
+            satisfied = observed == after
+        elif operation in {"pr_create", "pr_update"}:
+            satisfied = all(observed.get(key) == value for key, value in after.items())
+        elif operation == "ready":
+            satisfied = (observed.get("number") == after.get("number")
+                         and observed.get("draft") is False)
+        else:
+            satisfied = (observed.get("issue") == after.get("issue")
+                         and after.get("label") in observed.get("labels", []))
+        delivery.require(satisfied, "publisher write readback does not satisfy durable intent")
+        intent.update({"status": "checkpointed", "observed": observed,
+                       "checkpointed_at": delivery.utc_now()})
+        delivery.atomic_json(path, intent)
+
+    def _checkpoint_if_pending(self, packet: dict[str, Any], operation: str,
+                               observed: dict[str, Any]) -> None:
+        path = self._intent_path(packet, operation)
+        if not path.exists():
+            return
+        intent = delivery.read_json(path)
+        if intent.get("status") == "pending" and intent.get("operation") == operation:
+            self._checkpoint_intent(packet, operation, observed)
+
+    def _fault_after(self, packet: dict[str, Any], operation: str) -> None:
+        if os.environ.get("DELIVERY_PUBLISHER_FAULT_AFTER") != operation:
+            return
+        operation_id = packet.get("operation_id") or packet.get("action")
+        marker = (self.root / "faults" / packet["delivery_id"]
+                  / f"{packet.get('action')}-{operation_id}-{operation}")
+        if marker.exists():
+            return
+        delivery.atomic_json(marker, {"operation": operation, "injected_at": delivery.utc_now()})
+        raise delivery.DeliveryError(f"injected lost response after {operation}")
+
+    def _validate_candidate_paths(self, packet: dict[str, Any]) -> None:
+        if packet.get("credential_mode") != "app":
+            return
+        paths = packet.get("candidate", {}).get("paths", [])
+        for value in paths:
+            delivery.require(isinstance(value, str), "candidate path must be a string")
+            normalized = PurePosixPath(value).as_posix()
+            delivery.require(normalized == value and not PurePosixPath(value).is_absolute(),
+                             "candidate path is not normalized")
+            delivery.require(
+                value != POLICY_PATH and not value.startswith(".github/workflows/"),
+                f"candidate changes a privileged path: {value}",
+            )
+        delivery.require(self.app_session is not None, "App session is unavailable")
+        self.app_session.binding.verify_candidate_paths(paths)
 
     def _get_pr(self, number: int) -> dict[str, Any]:
         value = self.client.api(
@@ -276,8 +642,26 @@ class Publisher:
             else:
                 delivery.require(pr[field] == expected_pr[field], f"reviewed PR {field} changed")
         delivery.require(pr["state"] == "OPEN", "reviewed PR is not open")
+        reviews = self._reviews(pr["number"])
+        if packet.get("credential_mode") == "app":
+            authorized = set(evidence["reviewer_ids"])
+            for review in reviews:
+                user = review.get("user", {})
+                if user.get("id") in authorized:
+                    delivery.require(user.get("type") == "User",
+                                     "authorized reviewer is not a human account")
+                    login = user.get("login")
+                    delivery.require(isinstance(login, str) and login,
+                                     "authorized reviewer login is missing")
+                    resolved = self.client.api(
+                        "GET", self.repo, f"/users/{quote(login, safe='')}",
+                    )
+                    delivery.require(
+                        resolved.get("id") == user.get("id") and resolved.get("type") == "User",
+                        "authorized reviewer identity changed",
+                    )
         verdict = delivery.evaluate_reviews(
-            self._reviews(pr["number"]),
+            reviews,
             stage=evidence["stage"],
             generation=evidence["generation"],
             context_digest=evidence["context_digest"],
@@ -285,8 +669,137 @@ class Publisher:
             authorized_ids=evidence["reviewer_ids"],
             publisher_id=packet["policy_values"]["delivery"]["publisher_id"],
             minimum=evidence["minimum"],
+            require_human=packet.get("credential_mode") == "app",
         )
         delivery.require(verdict["approved"], f"{evidence['stage']} approval is not current")
+
+    def _ci_config(self) -> dict[str, Any] | None:
+        if self.app_session is None:
+            return None
+        value = getattr(self.app_session.binding, "ci", None)
+        delivery.require(isinstance(value, dict) and value,
+                         "App binding is missing trusted CI configuration")
+        return value
+
+    def _ci_status(self, pr: dict[str, Any]) -> dict[str, Any]:
+        config = self._ci_config()
+        if config is None:
+            return {"status": "success", "reason": "not_configured"}
+        workflow_id = config.get("workflow_id")
+        event = config.get("event", "pull_request")
+        required_jobs = [config.get("required_job")]
+        delivery.require(isinstance(workflow_id, (int, str)) and workflow_id,
+                         "CI workflow ID is invalid")
+        delivery.require(isinstance(event, str) and event, "CI event is invalid")
+        delivery.require(
+            isinstance(required_jobs, list) and required_jobs
+            and all(isinstance(name, str) and name for name in required_jobs),
+            "CI required jobs are invalid",
+        )
+        query = urlencode({"event": event, "per_page": 100})
+        runs = self.client.paginated(
+            self.repo,
+            f"/repos/{{owner}}/{{repo}}/actions/workflows/{workflow_id}/runs?{query}",
+        )
+        def correlated(run: dict[str, Any]) -> bool:
+            if (run.get("event") != event
+                    or str(run.get("workflow_id")) != str(workflow_id)):
+                return False
+            pull_requests = run.get("pull_requests", [])
+            delivery.require(isinstance(pull_requests, list), "CI PR correlation is malformed")
+            same_number = [item for item in pull_requests
+                           if item.get("number") == pr.get("number")]
+            exact = [item for item in pull_requests if (
+                item.get("number") == pr.get("number")
+                and item.get("head", {}).get("sha") == pr["head_sha"]
+                and item.get("base", {}).get("sha") == pr.get("base_sha")
+            )]
+            delivery.require(len(exact) <= 1, "CI PR correlation is ambiguous")
+            if pull_requests:
+                if not same_number:
+                    return False
+                delivery.require(len(same_number) == 1, "CI PR correlation is ambiguous")
+                candidate = same_number[0]
+                delivery.require(
+                    delivery.FULL_SHA.fullmatch(str(candidate.get("head", {}).get("sha", "")))
+                    and delivery.FULL_SHA.fullmatch(str(candidate.get("base", {}).get("sha", ""))),
+                    "CI PR correlation is malformed",
+                )
+                return len(exact) == 1
+            if run.get("head_sha") != pr["head_sha"]:
+                return False
+            delivery.require(
+                run.get("head_branch") == pr.get("head")
+                and run.get("head_repository", {}).get("id")
+                == self.app_session.binding.repository_id,
+                "CI direct-head correlation is incomplete",
+            )
+            return True
+
+        matching = [run for run in runs if correlated(run)]
+        if not matching:
+            return {"status": "waiting", "reason": "missing", "workflow_id": workflow_id,
+                    "event": event, "head_sha": pr["head_sha"]}
+        delivery.require(all(type(item.get("id")) is int and item["id"] > 0
+                             and type(item.get("run_attempt")) is int and item["run_attempt"] > 0
+                             and delivery.FULL_SHA.fullmatch(str(item.get("head_sha", "")))
+                             for item in matching), "CI run identity is malformed")
+        run_keys = {(item["id"], item["run_attempt"]) for item in matching}
+        delivery.require(len(run_keys) == len(matching), "CI run attempt is ambiguous")
+        run = max(matching, key=lambda item: (item["id"], item["run_attempt"]))
+        evidence = {"workflow_id": workflow_id, "event": event, "head_sha": pr["head_sha"],
+                    "tested_sha": run["head_sha"], "run_id": run["id"], "run_attempt": run["run_attempt"]}
+        if run["head_sha"] != pr["head_sha"]:
+            tested = self.client.api(
+                "GET", self.repo, f"/repos/{{owner}}/{{repo}}/git/commits/{run['head_sha']}",
+            )
+            if (tested.get("sha") != run["head_sha"]
+                    or [parent.get("sha") for parent in tested.get("parents", [])]
+                    != [pr["base_sha"], pr["head_sha"]]):
+                return {**evidence, "status": "unknown", "reason": "test_merge_parents_mismatch"}
+        if run.get("status") != "completed":
+            return {**evidence, "status": "waiting", "reason": "run_pending"}
+        if run.get("conclusion") == "action_required":
+            return {**evidence, "status": "waiting", "reason": "workflow_authorization_required"}
+        if run.get("conclusion") != "success":
+            return {**evidence, "status": "blocked", "reason": "run_failed",
+                    "conclusion": run.get("conclusion")}
+        jobs = self.client.paginated(
+            self.repo,
+            f"/repos/{{owner}}/{{repo}}/actions/runs/{run['id']}/attempts/"
+            f"{run.get('run_attempt', 1)}/jobs?per_page=100",
+        )
+        matching_jobs = [job for job in jobs if job.get("name") in required_jobs]
+        delivery.require(
+            all(isinstance(job.get("id"), int) and job["id"] > 0 for job in matching_jobs),
+            "CI required job identity is malformed",
+        )
+        delivery.require(len({job["name"] for job in matching_jobs}) == len(matching_jobs),
+                         "CI required job result is ambiguous")
+        latest = {job["name"]: job for job in matching_jobs}
+        missing = sorted(set(required_jobs) - set(latest))
+        if missing:
+            return {**evidence, "status": "waiting", "reason": "jobs_missing", "jobs": missing}
+        pending = sorted(name for name, job in latest.items() if job.get("status") != "completed")
+        if pending:
+            return {**evidence, "status": "waiting", "reason": "jobs_pending", "jobs": pending}
+        failed = sorted(name for name, job in latest.items() if job.get("conclusion") != "success")
+        if failed:
+            return {**evidence, "status": "blocked", "reason": "jobs_failed", "jobs": failed}
+        return {**evidence, "status": "success", "reason": "required_jobs_succeeded",
+                "jobs": [{"id": latest[name]["id"], "name": name}
+                         for name in sorted(required_jobs)]}
+
+    def _gate_ci(self, pr: dict[str, Any]) -> dict[str, Any]:
+        try:
+            return self._ci_status(pr)
+        except delivery.DeliveryError as exc:
+            reason = "ambiguous_readback" if "ambiguous" in str(exc) else "unreadable_ci"
+            return {"status": "unknown", "reason": reason, "head_sha": pr["head_sha"],
+                    "diagnostic": str(exc)}
+        except (AttributeError, KeyError, TypeError, ValueError) as exc:
+            return {"status": "unknown", "reason": "malformed_readback", "head_sha": pr["head_sha"],
+                    "diagnostic": type(exc).__name__}
 
     def _pr_body(self, packet: dict[str, Any]) -> str:
         expected = packet["expected"]
@@ -364,6 +877,9 @@ class Publisher:
         return exact[0] if exact else None
 
     def _verify_pr_provenance(self, packet: dict[str, Any], pr: dict[str, Any]) -> None:
+        if packet.get("credential_mode") == "app":
+            delivery.require(pr["body"] == self._pr_body(packet), "pull request provenance changed")
+            return
         expected = packet["expected"]
         _, owner, name = repo_parts(self.repo)
         markers = (
@@ -450,14 +966,47 @@ class Publisher:
         )
         return current
 
+    def _verify_app_candidate_history(self, packet: dict[str, Any], previous: str) -> None:
+        if packet.get("credential_mode") != "app":
+            return
+        expected = packet["expected"]
+        candidate = packet["candidate"]
+        hashes = candidate.get("hashes") if packet["action"] == "publish_plan" else None
+        with self.git_factory(self.root, self.canonical_url) as trusted:
+            trusted.fetch_base(expected["base"], expected["base_sha"])
+            trusted.import_candidate(
+                Path(candidate["bundle_path"]), expected["head_sha"], expected["base_sha"],
+                candidate["paths"], hashes,
+            )
+            trusted.verify_introduced_paths(
+                previous, allow_paths=self.app_session.binding.verify_candidate_paths,
+            )
+
+    def _require_pr_adoption(self, packet: dict[str, Any], pr: dict[str, Any],
+                             operation: str) -> None:
+        if packet.get("credential_mode") != "app":
+            return
+        expected = packet["expected"]
+        if operation == "pr_create":
+            after = {"head": expected["head"], "head_sha": expected["head_sha"],
+                     "base": expected["base"], "body": pr["body"]}
+        else:
+            after = {"number": pr["number"], "head_sha": expected["head_sha"],
+                     "base": expected["base"], "body": pr["body"]}
+        self._require_adoptable_intent(packet, operation, after)
+
     def _publish(self, packet: dict[str, Any]) -> dict[str, Any]:
         expected = packet["expected"]
+        self._validate_candidate_paths(packet)
         delivery.require(canonical_repo(expected["repo"]) == self.repo, "expected repository mismatch")
         issue = expected["issue"]
         policy = packet["policy_values"]
         template_key = "plan_template" if packet["action"] == "publish_plan" else "implementation_template"
         expected_head = policy["branches"][template_key].format(issue=issue)
         delivery.require(expected["head"] == expected_head, "publication branch violates policy")
+        if packet.get("credential_mode") == "app":
+            delivery.require(expected_head not in {expected["base"], policy["branches"]["default_parent"]},
+                             "App delivery branch must differ from the default branch and base")
         prefixes = policy["branches"].get("allowed_parent_prefixes", [])
         delivery.require(
             expected["base"] == policy["branches"]["default_parent"]
@@ -478,6 +1027,10 @@ class Publisher:
                 delivery.require(match["state"] == "OPEN" and match["draft"],
                                  "matching PR is not an open draft")
                 self._verify_pr_provenance(packet, match)
+                self._verify_app_pr_author(packet, match)
+                self._verify_app_candidate_history(packet, supersedes["head_sha"])
+                self._require_pr_adoption(packet, match, "pr_update")
+                self._checkpoint_if_pending(packet, "pr_update", match)
                 if packet["action"] == "publish_implementation":
                     self._approval(packet, "plan_approval")
                 return {"schema_version": 1, "action": packet["action"], "pr": match}
@@ -502,6 +1055,13 @@ class Publisher:
                     "matching PR is not an open draft",
                 )
                 self._verify_pr_provenance(packet, match)
+                self._verify_app_pr_author(packet, match)
+                previous = (prior["head_sha"] if prior.get("head") == expected["head"]
+                            else expected["base_sha"])
+                self._verify_app_candidate_history(packet, previous)
+                operation = "pr_update" if prior.get("head") == expected["head"] else "pr_create"
+                self._require_pr_adoption(packet, match, operation)
+                self._checkpoint_if_pending(packet, "pr_update", match)
                 self._approval(packet, "plan_approval")
                 return {"schema_version": 1, "action": packet["action"], "pr": match}
             verified_prior = self._verified_prior_plan(packet)
@@ -513,6 +1073,19 @@ class Publisher:
                                  "corrected PR identity changed")
             delivery.require(match["state"] == "OPEN" and match["draft"], "matching PR is not an open draft")
             self._verify_pr_provenance(packet, match)
+            self._verify_app_pr_author(packet, match)
+            previous = expected["base_sha"]
+            if isinstance(supersedes, dict):
+                previous = supersedes["head_sha"]
+            elif ((packet.get("prior_pr") or {}).get("head") == expected["head"]):
+                previous = packet["prior_pr"]["head_sha"]
+            self._verify_app_candidate_history(packet, previous)
+            operation = ("pr_update" if isinstance(supersedes, dict)
+                         or (packet.get("prior_pr") or {}).get("head") == expected["head"]
+                         else "pr_create")
+            self._require_pr_adoption(packet, match, operation)
+            self._checkpoint_if_pending(packet, "pr_create", match)
+            self._checkpoint_if_pending(packet, "pr_update", match)
             return {"schema_version": 1, "action": packet["action"], "pr": match}
         candidate = packet.get("candidate", {})
         hashes = candidate.get("hashes") if packet["action"] == "publish_plan" else None
@@ -532,10 +1105,19 @@ class Publisher:
                 if prior and prior.get("head") == expected["head"]
                 else None
             )
+            if packet.get("credential_mode") == "app":
+                trusted.verify_introduced_paths(
+                    prior_sha or expected["base_sha"],
+                    allow_paths=self.app_session.binding.verify_candidate_paths,
+                )
             delivery.require(
                 current in (None, prior_sha, expected["head_sha"]),
                 "publication branch moved",
             )
+            if (packet["action"] == "publish_implementation" and prior is not None
+                    and prior.get("head") == expected["head"]):
+                delivery.require(current is not None,
+                                 "same-branch implementation lost its planning ref")
             if verified_superseded is not None:
                 trusted.require_material_change(supersedes["head_sha"])
             if current != expected["head_sha"]:
@@ -543,7 +1125,25 @@ class Publisher:
                 self._base_tip(expected)
                 if packet["action"] == "publish_implementation":
                     self._approval(packet, "plan_approval")
-                trusted.push(expected["head"], expected["head_sha"], current)
+                self._record_intent(
+                    packet, "push", {"head": expected["head"], "sha": current},
+                    {"head": expected["head"], "sha": expected["head_sha"]},
+                )
+                push_options = ({"lock_fd": self.publisher_lock_fd}
+                                if packet.get("credential_mode") == "app" else {})
+                trusted.push(expected["head"], expected["head_sha"], current, **push_options)
+                self._fault_after(packet, "push")
+                self._checkpoint_intent(packet, "push", {
+                    "head": expected["head"], "sha": trusted.remote_head(expected["head"]),
+                })
+            else:
+                if packet.get("credential_mode") == "app":
+                    self._require_adoptable_intent(packet, "push", {
+                        "head": expected["head"], "sha": expected["head_sha"],
+                    })
+                self._checkpoint_if_pending(packet, "push", {
+                    "head": expected["head"], "sha": current,
+                })
         match = self._match_pr(packet)
         if match:
             if verified_superseded is not None:
@@ -551,6 +1151,13 @@ class Publisher:
                                  "corrected PR identity changed")
             delivery.require(match["state"] == "OPEN" and match["draft"], "matching PR is not an open draft")
             self._verify_pr_provenance(packet, match)
+            self._verify_app_pr_author(packet, match)
+            operation = ("pr_update" if verified_superseded is not None
+                         or (verified_prior and verified_prior.get("head") == expected["head"])
+                         else "pr_create")
+            self._require_pr_adoption(packet, match, operation)
+            self._checkpoint_if_pending(packet, "pr_create", match)
+            self._checkpoint_if_pending(packet, "pr_update", match)
             return {"schema_version": 1, "action": packet["action"], "pr": match}
 
         body = self._pr_body(packet)
@@ -564,6 +1171,10 @@ class Publisher:
             self._base_tip(expected)
             if packet["action"] == "publish_implementation":
                 self._approval(packet, "plan_approval")
+            self._record_intent(packet, "pr_update", current_pr, {
+                "number": current_pr["number"], "head_sha": expected["head_sha"],
+                "base": expected["base"], "body": body,
+            })
             value = self.client.api(
                 "PATCH",
                 self.repo,
@@ -571,6 +1182,7 @@ class Publisher:
                 {"title": ("Plan" if packet["action"] == "publish_plan" else "Implement")
                  + f" issue #{expected['issue']}", "body": body, "base": expected["base"]},
             )
+            operation = "pr_update"
         elif (
             packet["action"] == "publish_implementation"
             and verified_prior
@@ -588,6 +1200,10 @@ class Publisher:
                 "planning PR cannot be converted",
             )
             self._approval(packet, "plan_approval")
+            self._record_intent(packet, "pr_update", current_pr, {
+                "number": current_pr["number"], "head_sha": expected["head_sha"],
+                "base": expected["base"], "body": body,
+            })
             value = self.client.api(
                 "PATCH",
                 self.repo,
@@ -595,11 +1211,16 @@ class Publisher:
                 {"title": f"Implement issue #{expected['issue']}", "body": body,
                  "base": expected["base"]},
             )
+            operation = "pr_update"
         else:
             self._verify_policy(packet)
             self._base_tip(expected)
             if packet["action"] == "publish_implementation":
                 self._approval(packet, "plan_approval")
+            self._record_intent(packet, "pr_create", {
+                "head": expected["head"], "matching_pr": None,
+            }, {"head": expected["head"], "head_sha": expected["head_sha"],
+                "base": expected["base"], "body": body})
             value = self.client.api(
                 "POST",
                 self.repo,
@@ -613,6 +1234,8 @@ class Publisher:
                     "draft": True,
                 },
             )
+            operation = "pr_create"
+        self._fault_after(packet, operation)
         created = self._normalize_pr(value)
         if verified_superseded is not None:
             delivery.require(created["number"] == supersedes["number"],
@@ -625,6 +1248,8 @@ class Publisher:
             delivery.require(readback["number"] == supersedes["number"],
                              "corrected PR identity changed")
         self._verify_pr_provenance(packet, readback)
+        self._verify_app_pr_author(packet, readback)
+        self._checkpoint_intent(packet, operation, readback)
         return {"schema_version": 1, "action": packet["action"], "pr": readback}
 
     def _list_reviews(self, packet: dict[str, Any]) -> dict[str, Any]:
@@ -633,6 +1258,9 @@ class Publisher:
         for field in ("repo", "head", "head_sha", "base", "base_sha"):
             delivery.require(current[field] == expected[field], f"pull request {field} changed")
         delivery.require(current["draft"] and current["state"] == "OPEN", "review target is not an open draft")
+        self._verify_app_pr_author(packet, current)
+        if packet.get("credential_mode") == "app":
+            delivery.require(current["body"] == expected["body"], "review target PR body changed")
         return {
             "schema_version": 1,
             "action": "list_reviews",
@@ -641,6 +1269,28 @@ class Publisher:
             "reviews": self._reviews(current["number"]),
         }
 
+    def _finalization_ci(self, packet: dict[str, Any], pr: dict[str, Any]) -> dict[str, Any]:
+        if "actions_deferred_head" not in packet:
+            return self._gate_ci(pr)
+        delivery.require(packet.get("credential_mode") == "app"
+                         and packet["actions_deferred_head"] == pr["head_sha"],
+                         "Actions deferral is for a different implementation revision")
+        return {"status": "deferred", "reason": "operator_deferred", "head_sha": pr["head_sha"]}
+
+    def _existing_review_label(self, packet: dict[str, Any]) -> str:
+        label = packet.get("existing_review_label")
+        configured = packet["policy_values"].get("tracking", {}).get("review_label")
+        delivery.require(isinstance(label, str) and label and label == configured,
+                         "review label differs from policy")
+        try:
+            existing = self.client.api(
+                "GET", self.repo, f"/repos/{{owner}}/{{repo}}/labels/{quote(label, safe='')}",
+            )
+        except delivery.DeliveryError as exc:
+            raise delivery.DeliveryError(f"could not verify existing review label: {exc}") from exc
+        delivery.require(existing.get("name") == label, "review label readback differs from policy")
+        return label
+
     def _finalize(self, packet: dict[str, Any]) -> dict[str, Any]:
         expected = packet["pr"]
         current = self._get_pr(expected["number"])
@@ -648,19 +1298,35 @@ class Publisher:
             delivery.require(current[field] == expected[field], f"implementation PR {field} changed")
         delivery.require(current["state"] == "OPEN", "implementation PR is not open")
         self._verify_pr_provenance(packet, current)
+        self._verify_app_pr_author(packet, current)
         if not current["draft"]:
+            if packet.get("credential_mode") == "app":
+                self._require_adoptable_intent(
+                    packet, "ready", {"number": current["number"], "draft": False},
+                )
             self._approval(packet, "plan_approval")
             self._approval(packet)
             return self._finalize_issue(packet, current)
         self._approval(packet, "plan_approval")
         self._approval(packet)
+        ci = self._finalization_ci(packet, current)
+        if ci["status"] not in {"success", "deferred"}:
+            suffix = "waiting" if ci["status"] == "waiting" else "blocked"
+            return {"schema_version": 1, "action": "finalize",
+                    "status": f"pre_ready_ci_{suffix}", "pr": current, "ci": ci}
         self._verify_policy(packet)
         self._base_tip({"base": current["base"], "base_sha": current["base_sha"]})
+        self._approval(packet, "plan_approval")
+        self._approval(packet)
+        self._existing_review_label(packet)
         query = (
             "mutation($id:ID!){markPullRequestReadyForReview(input:{pullRequestId:$id})"
             "{pullRequest{id isDraft}}}"
         )
+        self._record_intent(packet, "ready", {"number": current["number"], "draft": True},
+                            {"number": current["number"], "draft": False})
         result = self.client.graphql(query, {"id": current["node_id"]})
+        self._fault_after(packet, "ready")
         ready = result.get("data", {}).get("markPullRequestReadyForReview", {}).get("pullRequest", {})
         delivery.require(ready.get("isDraft") is False, "GitHub did not mark the PR ready")
         readback = self._get_pr(current["number"])
@@ -668,6 +1334,8 @@ class Publisher:
             not readback["draft"] and readback["head_sha"] == current["head_sha"],
             "ready PR readback changed",
         )
+        self._verify_app_pr_author(packet, readback)
+        self._checkpoint_intent(packet, "ready", readback)
         return self._finalize_issue(packet, readback)
 
     def _finalize_issue(self, packet: dict[str, Any], pr: dict[str, Any]) -> dict[str, Any]:
@@ -678,39 +1346,81 @@ class Publisher:
         for field in ("repo", "head", "head_sha", "base", "base_sha"):
             delivery.require(current[field] == pr[field], f"ready PR {field} changed")
         delivery.require(current["state"] == "OPEN" and not current["draft"], "PR is not ready")
+        self._verify_app_pr_author(packet, current)
+        self._verify_pr_provenance(packet, current)
+        self._checkpoint_if_pending(packet, "ready", current)
         self._base_tip({"base": current["base"], "base_sha": current["base_sha"]})
+        ci = self._finalization_ci(packet, current)
+        if ci["status"] not in {"success", "deferred"}:
+            suffix = "waiting" if ci["status"] == "waiting" else "blocked"
+            return {"schema_version": 1, "action": "finalize",
+                    "status": f"post_ready_ci_{suffix}", "pr": current, "ci": ci}
         issue = self._verify_issue(packet)
         digest = hashlib.sha256(
             delivery.canonical_json({"title": issue.get("title", ""), "body": issue.get("body", "")})
         ).hexdigest()
         delivery.require(digest == self.issue_digest, "source issue changed during finalization")
-        label = packet["existing_review_label"]
-        configured = packet["policy_values"].get("tracking", {}).get("review_label")
-        delivery.require(label == configured and isinstance(label, str) and label,
-                         "review label differs from policy")
-        self.client.api(
-            "GET", self.repo, f"/repos/{{owner}}/{{repo}}/labels/{quote(label, safe='')}",
-        )
-        self.client.api(
-            "POST",
-            self.repo,
-            f"/repos/{{owner}}/{{repo}}/issues/{packet['issue']}/labels",
-            {"labels": [label]},
-        )
+        label = self._existing_review_label(packet)
+        self._approval(packet, "plan_approval")
+        self._approval(packet)
+        current_labels = {item.get("name") for item in issue.get("labels", [])}
+        if (packet.get("credential_mode") == "app" and label not in current_labels
+                and packet.get("checkpoint_tracking") is True):
+            return {"schema_version": 1, "action": "finalize", "status": "tracking_pending",
+                    "pr": current, "ci": ci}
+        if label not in current_labels:
+            self._record_intent(packet, "label", {"issue": packet["issue"],
+                                "labels": sorted(item for item in current_labels if item)},
+                                {"issue": packet["issue"], "label": label})
+            self.client.api(
+                "POST",
+                self.repo,
+                f"/repos/{{owner}}/{{repo}}/issues/{packet['issue']}/labels",
+                {"labels": [label]},
+            )
+            self._fault_after(packet, "label")
+        elif packet.get("credential_mode") == "app":
+            self._require_adoptable_intent(
+                packet, "label", {"issue": packet["issue"], "label": label},
+            )
         issue = self.client.api(
             "GET", self.repo, f"/repos/{{owner}}/{{repo}}/issues/{packet['issue']}",
         )
         labels = sorted({item.get("name") for item in issue.get("labels", []) if item.get("name")})
         delivery.require(label in labels, "review label readback failed")
+        self._checkpoint_if_pending(packet, "label", {"issue": packet["issue"], "labels": labels})
+        self._verify_policy(packet)
+        self._approval(packet, "plan_approval")
+        self._approval(packet)
+        final_pr = self._get_pr(current["number"])
+        for field in ("repo", "head", "head_sha", "base", "base_sha"):
+            delivery.require(final_pr[field] == current[field],
+                             f"terminal PR {field} changed")
+        delivery.require(final_pr["state"] == "OPEN" and not final_pr["draft"],
+                         "terminal PR is not open and ready")
+        self._verify_app_pr_author(packet, final_pr)
+        self._verify_pr_provenance(packet, final_pr)
+        terminal_ci = self._finalization_ci(packet, final_pr)
+        if terminal_ci["status"] not in {"success", "deferred"}:
+            suffix = "waiting" if terminal_ci["status"] == "waiting" else "blocked"
+            return {"schema_version": 1, "action": "finalize",
+                    "status": f"post_ready_ci_{suffix}", "pr": final_pr, "ci": terminal_ci}
+        terminal_issue = self._verify_issue(packet)
+        terminal_labels = sorted({item.get("name") for item in terminal_issue.get("labels", [])
+                                  if item.get("name")})
+        delivery.require(label in terminal_labels, "terminal review label readback failed")
         return {
             "schema_version": 1,
             "action": "finalize",
-            "pr": current,
-            "issue": {"number": packet["issue"], "labels": labels},
+            "status": "review_ready",
+            "pr": final_pr,
+            "issue": {"number": packet["issue"], "labels": terminal_labels},
+            "ci": terminal_ci,
         }
 
 
 def main() -> int:
+    app_client = None
     try:
         packet = json.load(sys.stdin)
         delivery.require(
@@ -719,17 +1429,49 @@ def main() -> int:
         )
         root_value = os.environ.get("DELIVERY_PUBLISHER_ROOT")
         delivery.require(bool(root_value), "trusted publisher root is missing")
+        app_config = os.environ.get("DELIVERY_APP_CONFIG")
+        session = None
+        client = GitHubClient()
+        git_factory = TrustedGit
+        if packet.get("credential_mode") == "app":
+            delivery.require(bool(app_config), "protected App binding is missing")
+            binding = AppBinding.load(
+                Path(app_config), expected_digest=packet.get("app_binding_digest"),
+            )
+            delivery.require(Path(root_value).resolve().is_relative_to(binding.state_dir),
+                             "publisher root is outside the protected App state directory")
+            session = AppAuthenticator(binding).mint()
+            auth_env = session.auth_env()
+            app_client = session.publisher_client()
+            client = app_client
+            git_factory = lambda root, url: TrustedGit(
+                root, url, auth_env=auth_env, require_explicit_token=True,
+            )
+        else:
+            delivery.require(not app_config, "App binding cannot be used in user-token mode")
         publisher = Publisher(
             repo=os.environ.get("DELIVERY_PUBLISHER_REPO", ""),
             root=Path(root_value),
-            client=GitHubClient(),
+            client=client,
+            git_factory=git_factory,
+            app_session=session,
         )
-        print(json.dumps(publisher.execute(packet), sort_keys=True))
+        result = publisher.execute(packet)
+        if app_client is not None:
+            app_client.revoke()
+            app_client = None
+        print(json.dumps(result, sort_keys=True))
         return 0
     except (delivery.DeliveryError, KeyError, TypeError, ValueError, OSError,
             json.JSONDecodeError) as exc:
         print(json.dumps({"status": "blocked", "error": str(exc)}, sort_keys=True))
         return 2
+    finally:
+        if app_client is not None:
+            try:
+                app_client.revoke()
+            except (delivery.DeliveryError, OSError):
+                pass
 
 
 if __name__ == "__main__":
