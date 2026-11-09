@@ -61,6 +61,28 @@ class ManualDeliveryTest(unittest.TestCase):
                 publisher._get_pr.return_value = {**self.pr, field: value}
                 session.exact_pr(publisher, self.pr, draft=True)
 
+    def test_first_handoff_binds_explicit_pr_with_unset_number(self):
+        self.state["publication"].clear()
+        self.state["manual_handoff"] = {
+            **self.pr, "stage": "plan", "number": None, "prior_pr": None,
+            "generation": 1, "manifest_digest": "a" * 64,
+        }
+        session = Mock(repo=self.repo)
+        publisher = session.publisher.return_value
+        publisher._get_pr.return_value = self.pr
+        publisher._all_head_prs.return_value = [self.pr]
+        session.ref.return_value = self.plan
+        save = Mock()
+        with (patch("manual.Session.from_state", return_value=session),
+              patch("manual.preview.verify_candidate")):
+            publisher._get_pr.return_value = {**self.pr, "head_sha": self.implementation}
+            with self.assertRaisesRegex(RuntimeError, "head_sha mismatch"):
+                manual.reconcile(self.state, "plan", 7, save)
+            publisher._get_pr.return_value = self.pr
+            manual.reconcile(self.state, "plan", 7, save)
+        self.assertEqual(self.state["publication"]["plan"]["pr"]["number"], 7)
+        save.assert_called_once_with(self.state)
+
     def test_allowlisted_developer_must_submit_review_on_current_head(self):
         context, pr, _ = publisher_adapter.approval_context(self.state, "implementation")
         receipt = {

@@ -344,7 +344,7 @@ def reconcile(state, stage, number, save):
         if pr["head_sha"] == prior["head_sha"]:
             session.exact_pr(publisher, prior, draft=True)
             return
-    publisher_adapter.validate_pr(pr, handoff, draft=True)
+    publisher_adapter.validate_pr(pr, {**handoff, "number": number}, draft=True)
     delivery.require(session.ref(pr["head"]) == handoff["head_sha"], "published branch head differs from handoff")
     matches = publisher._all_head_prs(pr["head"])
     delivery.require([item["node_id"] for item in matches] == [pr["node_id"]],
