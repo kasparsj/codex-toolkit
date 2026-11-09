@@ -1,6 +1,6 @@
 "use strict";
 
-const state = { revision: null, item: null, sequence: 0, expires: 0, originLink: null, timer: null };
+const state = { revision: null, item: null, sequence: 0, expires: 0, timer: null };
 const $ = (id) => document.getElementById(id);
 const el = (name, attrs = {}, text = null) => {
   const node = document.createElement(name);
@@ -42,6 +42,7 @@ async function load({ force = false, revision = null, focus = false } = {}) {
   const sequence = ++state.sequence;
   const endpoint = force ? "/api/action-check" : "/api/item";
   const query = revision ? `?revision=${encodeURIComponent(revision)}` : "";
+  const reviewFocus = $("review-actions")?.contains(document.activeElement) ? document.activeElement.id : null;
   if (state.item?.review) withdrawActions("Checking current revision…");
   try {
     const response = await fetch(endpoint + query, { credentials: "same-origin", cache: "no-store" });
@@ -65,7 +66,7 @@ async function load({ force = false, revision = null, focus = false } = {}) {
                ["revision_changed", "evidence_unavailable", "eligibility_unavailable"].includes(data.item.state)) {
       scheduleRefresh(refreshInterval);
     }
-    render(data.item, focus);
+    render(data.item, focus, reviewFocus);
     return data;
   } catch (_) {
     if (sequence !== state.sequence) return null;
@@ -75,11 +76,26 @@ async function load({ force = false, revision = null, focus = false } = {}) {
   }
 }
 
-function render(item, focus = false) {
+function render(item, focus = false, reviewFocus = null) {
+  const active = document.activeElement;
+  const restore = active.id || (active === document.body ? reviewFocus : null);
   renderInbox(item);
   renderDetail(item);
+  updateRoute();
+  if (focus && isDetail()) $("detail-title")?.focus();
+  else if (restore && (!active.isConnected || active === document.body)) {
+    const target = $(restore) || (isDetail() && ($("revision-warning") || $("detail-title")));
+    target?.focus();
+  }
+}
+
+function updateRoute() {
   document.body.classList.toggle("detail-route", isDetail());
-  if (focus) requestAnimationFrame(() => $("detail-title")?.focus());
+  $("item-link")?.setAttribute("aria-current", isDetail() ? "page" : "false");
+}
+
+function focusInbox() {
+  ($("item-link") || $("inbox-title")).focus();
 }
 
 function renderInbox(item) {
@@ -87,15 +103,16 @@ function renderInbox(item) {
   const active = item.delivery.status === "plan_review";
   if (!active) { $("feed-status").textContent = "You’re caught up"; return; }
   $("feed-status").textContent = "Needs action · 1";
-  const link = el("a", { href: `/items/${encodeURIComponent(item.delivery_id)}`, class: "item-link",
+  const link = el("a", { href: `/items/${encodeURIComponent(item.delivery_id)}`, class: "item-link", id: "item-link",
     "aria-current": isDetail() ? "page" : "false" });
   link.append(el("span", { class: "item-title" }, titleFor(item)),
               el("span", { class: "item-meta" }, `${item.repo} · Draft PR #${item.pr.number} · ${item.pr.head_sha.slice(0, 7)}`));
   link.addEventListener("click", (event) => {
-    if (matchMedia("(min-width: 721px)").matches) {
-      event.preventDefault(); state.originLink = link; history.pushState({}, "", link.href);
-      document.body.classList.add("detail-route"); $("detail-title")?.focus();
-    }
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    if (!isDetail()) history.pushState({ fromInbox: true }, "", link.href);
+    updateRoute();
+    $("detail-title")?.focus();
   });
   const row = el("li"); row.append(link); list.append(row);
 }
@@ -224,11 +241,19 @@ function renderAccessDenied() {
 $("refresh").addEventListener("click", () => load({ focus: isDetail() }));
 $("mobile-back").addEventListener("click", (event) => {
   event.preventDefault();
-  if (document.referrer.startsWith(location.origin) && history.length > 1) history.back();
-  else location.assign("/");
+  if (history.state?.fromInbox) {
+    history.back();
+  } else {
+    history.replaceState(null, "", "/");
+    updateRoute();
+    focusInbox();
+  }
 });
-window.addEventListener("popstate", () => { document.body.classList.toggle("detail-route", isDetail());
-  if (!isDetail()) requestAnimationFrame(() => (state.originLink || $("inbox-title")).focus()); });
+window.addEventListener("popstate", () => {
+  updateRoute();
+  if (isDetail()) $("detail-title")?.focus();
+  else focusInbox();
+});
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) clearTimeout(state.timer);
   else load({ force: Boolean(state.item?.review), revision: state.item?.review ? state.revision : null });
