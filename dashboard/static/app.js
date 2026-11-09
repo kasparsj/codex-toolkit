@@ -1,0 +1,262 @@
+"use strict";
+
+const state = { revision: null, item: null, sequence: 0, expires: 0, timer: null };
+const $ = (id) => document.getElementById(id);
+const el = (name, attrs = {}, text = null) => {
+  const node = document.createElement(name);
+  for (const [key, value] of Object.entries(attrs)) {
+    if (key === "class") node.className = value;
+    else node.setAttribute(key, value);
+  }
+  if (text !== null) node.textContent = text;
+  return node;
+};
+const announce = (message) => { $("live").textContent = message; };
+const isDetail = () => location.pathname.startsWith("/items/");
+const refreshInterval = 15000;
+
+function titleFor(item) {
+  const labels = {
+    actionable: "Plan review needed", verified_waiting: "Review verified · Awaiting runner confirmation",
+    revision_changed: "Revision changed while you were reviewing", evidence_unavailable: "Review evidence unavailable",
+    github_unavailable: "Couldn’t confirm current PR revision", rejected: "Changes requested",
+    implementation_next: "Plan review complete · Implementation next",
+    implementation_review: "Implementation review pending", post_plan: "Plan review complete",
+    delivery_ready: "Delivery ready for review", runner_failed: "Delivery runner failed",
+    eligibility_unavailable: "Reviewer eligibility unavailable",
+    waiting: "Review request unavailable"
+  };
+  return labels[item.state] || "Delivery status";
+}
+
+function scheduleRefresh(delay, revision = null) {
+  if (document.hidden) return;
+  state.timer = setTimeout(() => {
+    if (revision) announce("Checking current revision");
+    load({ force: Boolean(revision), revision });
+  }, delay);
+}
+
+async function load({ force = false, revision = null, focus = false } = {}) {
+  clearTimeout(state.timer);
+  const sequence = ++state.sequence;
+  const endpoint = force ? "/api/action-check" : "/api/item";
+  const query = revision ? `?revision=${encodeURIComponent(revision)}` : "";
+  const reviewFocus = $("review-actions")?.contains(document.activeElement) ? document.activeElement.id : null;
+  if (state.item?.review) withdrawActions("Checking current revision…");
+  try {
+    const response = await fetch(endpoint + query, { credentials: "same-origin", cache: "no-store" });
+    if (sequence !== state.sequence) return null;
+    if (response.status === 401) {
+      if (sessionStorage.getItem("oauth-attempted")) { renderSignIn(); return null; }
+      sessionStorage.setItem("oauth-attempted", "1"); location.assign("/auth/github"); return null;
+    }
+    if (response.status === 403) { renderAccessDenied(); return null; }
+    const data = await response.json();
+    if (sequence !== state.sequence) return null;
+    if (!response.ok || data.status === "unavailable") throw new Error("unavailable");
+    if (data.status === "stale") { await load({ focus: true }); return null; }
+    state.revision = data.revision;
+    state.item = data.item;
+    state.expires = Date.now() + data.fresh_for_ms;
+    sessionStorage.removeItem("oauth-attempted");
+    if (data.item.review) {
+      scheduleRefresh(Math.min(refreshInterval, data.fresh_for_ms), data.revision);
+    } else if (data.item.github_unavailable ||
+               ["revision_changed", "evidence_unavailable", "eligibility_unavailable"].includes(data.item.state)) {
+      scheduleRefresh(refreshInterval);
+    }
+    render(data.item, focus, reviewFocus);
+    return data;
+  } catch (_) {
+    if (sequence !== state.sequence) return null;
+    renderUnavailable();
+    scheduleRefresh(refreshInterval);
+    return null;
+  }
+}
+
+function render(item, focus = false, reviewFocus = null) {
+  const active = document.activeElement;
+  const restore = active.id || (active === document.body ? reviewFocus : null);
+  renderInbox(item);
+  renderDetail(item);
+  updateRoute();
+  if (focus && isDetail()) $("detail-title")?.focus();
+  else if (restore && (!active.isConnected || active === document.body)) {
+    const target = $(restore) || (isDetail() && ($("revision-warning") || $("detail-title")));
+    target?.focus();
+  }
+}
+
+function updateRoute() {
+  document.body.classList.toggle("detail-route", isDetail());
+  $("item-link")?.setAttribute("aria-current", isDetail() ? "page" : "false");
+}
+
+function focusInbox() {
+  ($("item-link") || $("inbox-title")).focus();
+}
+
+function renderInbox(item) {
+  const list = $("items"); list.replaceChildren();
+  const active = item.delivery.status === "plan_review";
+  if (!active) { $("feed-status").textContent = "You’re caught up"; return; }
+  $("feed-status").textContent = "Needs action · 1";
+  const link = el("a", { href: `/items/${encodeURIComponent(item.delivery_id)}`, class: "item-link", id: "item-link",
+    "aria-current": isDetail() ? "page" : "false" });
+  link.append(el("span", { class: "item-title" }, titleFor(item)),
+              el("span", { class: "item-meta" }, `${item.repo} · Draft PR #${item.pr.number} · ${item.pr.head_sha.slice(0, 7)}`));
+  link.addEventListener("click", (event) => {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    if (!isDetail()) history.pushState({ fromInbox: true }, "", link.href);
+    updateRoute();
+    $("detail-title")?.focus();
+  });
+  const row = el("li"); row.append(link); list.append(row);
+}
+
+function renderDetail(item) {
+  const body = $("detail-body"); body.replaceChildren();
+  body.append(el("p", { class: "eyebrow" }, "Delivery · Plan"));
+  const heading = el("h2", { id: "detail-title", tabindex: "-1" }, titleFor(item)); body.append(heading);
+  body.append(el("p", { class: "meta" }, `${item.repo} · Issue #${item.issue ?? "—"} · Draft PR #${item.pr.number}`));
+  if (item.issue_title) body.append(el("p", {}, item.issue_title));
+  body.append(el("p", {}, `Revision ${item.generation}`));
+  body.append(el("p", { class: "sha" }, item.pr.head_sha));
+  const evidenceActions = el("div", { class: "actions" });
+  const copySha = el("button", { type: "button" }, "Copy full SHA");
+  copySha.addEventListener("click", async () => { await navigator.clipboard.writeText(item.pr.head_sha); announce("Full commit SHA copied"); });
+  evidenceActions.append(link("Open exact commit", item.pr.commit_url), copySha); body.append(evidenceActions);
+  body.append(el("h3", {}, "Review evidence"));
+  for (const artifact of item.artifacts) {
+    const actions = el("div", { class: "actions" });
+    actions.append(link("Open committed plan", artifact.url)); body.append(actions);
+    if (artifact.verified && typeof artifact.content === "string") {
+      const details = el("details"); details.append(el("summary", {}, `Verified ${artifact.path}`), el("pre", {}, artifact.content)); body.append(details);
+    } else body.append(notice(`Pinned evidence ${artifact.path} could not be verified.`));
+  }
+  if (item.github_unavailable && item.state !== "github_unavailable") {
+    body.append(notice("GitHub is unavailable. The dashboard is showing the saved Delivery stage."));
+  }
+  renderState(body, item);
+  if (item.receipt) renderReceipt(body, item);
+  if (item.implementation) {
+    body.append(el("h3", {}, "Next confirmed stage"));
+    const next = el("div", { class: "actions" });
+    next.append(link(`Open implementation PR #${item.implementation.number}`, item.implementation.url),
+                link("Open implementation commit", item.implementation.commit_url)); body.append(next);
+  }
+}
+
+function renderState(body, item) {
+  if (item.state === "actionable" && item.review) {
+    body.append(el("h3", {}, "Submit in GitHub"));
+    body.append(notice("Submit a GitHub Comment review using the exact runner text.", "good"));
+    const actions = el("div", { class: "actions", id: "review-actions" });
+    const open = el("button", { type: "button", class: "primary", id: "open-review" }, "Open GitHub review ↗");
+    const copy = el("button", { type: "button", id: "copy-approval" }, "Copy approval text");
+    const reject = el("button", { type: "button", id: "copy-reject" }, "Copy changes-requested text");
+    open.addEventListener("click", () => guarded("open")); copy.addEventListener("click", () => guarded("approve"));
+    reject.addEventListener("click", () => guarded("reject")); actions.append(open, copy, reject); body.append(actions);
+  } else if (item.state === "revision_changed") {
+    const warning = notice("The previous receipt text has been withdrawn. Operator reconciliation or a trusted replacement is required.");
+    warning.id = "revision-warning"; warning.tabIndex = -1; body.append(warning);
+    const inspect = el("div", { class: "actions" });
+    if (item.pr.current_commit_url) inspect.append(link("Open current exact head ↗", item.pr.current_commit_url));
+    inspect.append(link("Open current PR for inspection ↗", item.pr.inspect_url)); body.append(inspect);
+  } else if (item.state === "github_unavailable") {
+    body.append(notice("GitHub is unavailable. Saved evidence is shown separately; review handoff is suspended."));
+  } else if (item.state === "evidence_unavailable") {
+    body.append(notice("Required pinned evidence could not be verified. Review handoff is suspended."));
+  } else if (item.state === "verified_waiting") {
+    body.append(notice("The runner saved an approval. Waiting for the operator to run host resume.", "good"));
+  } else if (item.state === "implementation_review") {
+    body.append(notice("The runner confirmed implementation review is next.", "good"));
+  } else if (item.state === "implementation_next") {
+    body.append(notice("The runner confirmed the plan gate advanced. Implementation is next.", "good"));
+  } else if (item.state === "post_plan") {
+    body.append(notice("The runner confirmed the plan gate advanced. Delivery is continuing from its saved stage.", "good"));
+  } else if (item.state === "delivery_ready") {
+    body.append(notice("Delivery confirmed the implementation is ready for repository review.", "good"));
+  } else if (item.state === "runner_failed") {
+    body.append(notice("The runner reported a failure. Review controls remain closed; the operator must inspect the host run."));
+  } else if (item.state === "rejected") body.append(notice("A matching changes-requested receipt was saved. Review controls remain closed."));
+  else if (item.state === "eligibility_unavailable") body.append(notice("Toolkit confirmed repository access but could not confirm reviewer eligibility. Review controls are suspended."));
+  else body.append(notice(item.viewer.eligible ? "Review request is not currently actionable." : "An eligible plan reviewer must act."));
+}
+
+function renderReceipt(body, item) {
+  const receipt = item.receipt; const section = el("section", { class: "receipt" });
+  section.append(el("h3", {}, "Saved runner receipt"));
+  const approvals = Array.isArray(receipt.approvers) ? receipt.approvers.length : 0;
+  const minimum = receipt.minimum ?? 0;
+  section.append(el("p", {}, receipt.approved ? `Review verified · ${approvals} of ${minimum} approvals` :
+    (receipt.rejectors?.length ? "Changes requested" : approvals ? `${approvals} of ${minimum} approvals` : "No matching review found")));
+  if (receipt.commit_id) section.append(el("p", { class: "sha" }, `Reviewed commit · ${receipt.commit_id}`));
+  if (receipt.checked_at) section.append(el("p", { class: "muted" }, `Toolkit last checked · ${receipt.checked_at}`));
+  if (receipt.enrichment === "verified") {
+    section.append(el("p", {}, `GitHub review · @${receipt.reviewer} · ${receipt.submitted_at}`));
+    if (receipt.url) section.append(link("Open GitHub review receipt ↗", receipt.url));
+  } else section.append(el("p", { class: "muted" }, "Saved verdict retained; GitHub receipt metadata is unavailable or changed."));
+  body.append(section);
+}
+
+async function guarded(kind) {
+  const data = await load({ force: true, revision: state.revision });
+  if (!data?.item?.review || data.revision !== state.revision || Date.now() >= state.expires) {
+    $("revision-warning")?.focus(); announce("Review controls are no longer available"); return;
+  }
+  if (kind === "open") location.assign(data.item.review.url);
+  else {
+    const value = kind === "approve" ? data.item.review.approve : data.item.review.reject;
+    await navigator.clipboard.writeText(value); announce(`${kind === "approve" ? "Approval" : "Changes-requested"} text copied`);
+  }
+}
+
+function withdrawActions(message) {
+  const actions = $("review-actions"); if (actions) actions.replaceChildren(el("span", { class: "muted" }, message));
+}
+function notice(text, kind = "") { return el("p", { class: `notice ${kind}`.trim() }, text); }
+function link(text, href) { return el("a", { href, class: "button", target: "_blank", rel: "noopener noreferrer" }, text); }
+function renderUnavailable() {
+  $("feed-status").textContent = "Feed unavailable"; $("items").replaceChildren();
+  $("detail-body").replaceChildren(el("h2", { id: "detail-title", tabindex: "-1" }, "Needs attention unavailable"),
+    notice("The configured saved feed is unavailable or expired. Review controls are suspended."));
+}
+function renderSignIn() {
+  $("feed-status").textContent = "Sign in required"; $("items").replaceChildren();
+  const signIn = el("a", { href: "/auth/github", class: "button primary" }, "Sign in with GitHub");
+  signIn.addEventListener("click", () => sessionStorage.removeItem("oauth-attempted"));
+  $("detail-body").replaceChildren(el("h2", { id: "detail-title", tabindex: "-1" }, "Sign in required"),
+    el("p", {}, "Use the configured GitHub account to open this private Delivery review."), signIn);
+}
+function renderAccessDenied() {
+  $("feed-status").textContent = "Repository access denied"; $("items").replaceChildren();
+  $("detail-body").replaceChildren(el("h2", { id: "detail-title", tabindex: "-1" }, "Repository access required"),
+    notice("The signed-in GitHub account cannot access the configured private repository. No private item data was returned."));
+}
+
+$("refresh").addEventListener("click", () => load({ focus: isDetail() }));
+$("mobile-back").addEventListener("click", (event) => {
+  event.preventDefault();
+  if (history.state?.fromInbox) {
+    history.back();
+  } else {
+    history.replaceState(null, "", "/");
+    updateRoute();
+    focusInbox();
+  }
+});
+window.addEventListener("popstate", () => {
+  updateRoute();
+  if (isDetail()) $("detail-title")?.focus();
+  else focusInbox();
+});
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) clearTimeout(state.timer);
+  else load({ force: Boolean(state.item?.review), revision: state.item?.review ? state.revision : null });
+});
+window.addEventListener("focus", () => { if (Date.now() >= state.expires) load(); });
+load({ focus: isDetail() });
