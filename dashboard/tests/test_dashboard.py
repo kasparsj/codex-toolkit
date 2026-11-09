@@ -10,6 +10,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
@@ -87,6 +88,38 @@ class FakeGitHub:
         if value is None:
             raise server.GitHubUnavailable("missing fixture")
         return deepcopy(value)
+
+
+class SessionStoreTest(unittest.TestCase):
+    def test_pending_cap_recovers_after_expiry(self):
+        store = server.SessionStore()
+        with patch.object(server, "MAX_PENDING_SIGN_INS", 1), patch.object(server.time, "monotonic") as clock:
+            clock.return_value = 100
+            key, _ = store.create()
+            with self.assertRaises(server.SessionCapacity):
+                store.create()
+            clock.return_value += server.SIGN_IN_TTL
+            new_key, _ = store.create()
+            self.assertNotIn(key, store.values)
+            self.assertNotEqual(key, new_key)
+
+    def test_state_is_consumed_once(self):
+        store = server.SessionStore()
+        key, session = store.create()
+        self.assertEqual(store.consume_sign_in(key, session.oauth_state), session.verifier)
+        with self.assertRaises(server.NotAuthorized):
+            store.consume_sign_in(key, session.oauth_state)
+
+    def test_total_session_cap_and_expiration(self):
+        store = server.SessionStore()
+        with patch.object(server, "MAX_SESSIONS", 1), patch.object(server.time, "monotonic") as clock:
+            clock.return_value = 100
+            key, _ = store.create(token="test-token")
+            with self.assertRaises(server.SessionCapacity):
+                store.create()
+            clock.return_value += server.SESSION_TTL
+            store.create(token="other-test-token")
+            self.assertNotIn(key, store.values)
 
 
 class DashboardServiceTest(unittest.TestCase):

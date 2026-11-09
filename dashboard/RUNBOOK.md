@@ -12,26 +12,18 @@ This slice is a read-only dashboard for one configured private repository and on
 
 ## Continuously project and transport during the trial
 
-The runner-side command reuses the Delivery coordinator and formatter. It validates the configured repo/run and writes an atomic, 30-second snapshot. Run this loop in the operator's existing foreground supervisor for the whole trial; no scheduler or remote installation is introduced here.
+Start the exporter on the runner host from the Toolkit checkout. Create the remote inbox as an owner-only directory before starting the exporter.
 
 ```sh
-while true; do
-  PYTHONDONTWRITEBYTECODE=1 /opt/homebrew/bin/python3 -m dashboard.projection \
-    --state-dir "$DELIVERY_STATE_DIR" \
-    --repo "$DELIVERY_REPO" \
-    --delivery-id "$DELIVERY_ID" \
-    --output "$DASHBOARD_EXPORT_DIR/projection.json" \
-    --max-age 30 || exit 1
-
-  scp "$DASHBOARD_EXPORT_DIR/projection.json" \
-    kaspars-ubuntu:"$DASHBOARD_INBOX/projection.json.incoming" || exit 1
-  ssh kaspars-ubuntu \
-    "chmod 600 '$DASHBOARD_INBOX/projection.json.incoming' && mv '$DASHBOARD_INBOX/projection.json.incoming' '$DASHBOARD_INBOX/projection.json'" || exit 1
-  sleep 10
-done
+PYTHONDONTWRITEBYTECODE=1 python3 -m dashboard.export_snapshot \
+  --state-dir "$DELIVERY_STATE_DIR" \
+  --repo "$DELIVERY_REPO" \
+  --delivery-id "$DELIVERY_ID" \
+  --host kaspars-ubuntu \
+  --inbox "$DASHBOARD_INBOX"
 ```
 
-The final `mv` is the one-way atomic snapshot handoff. Use explicit, owner-controlled absolute directories for both export variables. The Ubuntu dashboard never connects back to the runner and receives no host paths or credentials. A snapshot expires after 30 seconds; the browser rechecks after 15 seconds while visible and every review handoff runs a fresh server-side GitHub read.
+Run the exporter under the operator's supervisor during the trial. It sends a fresh snapshot over SSH every 10 seconds. Each SSH attempt times out after 10 seconds. A failed projection or transfer leaves the last complete snapshot in place and retries after 10 seconds. The snapshot expires after 30 seconds, at which point the dashboard suspends review controls. The browser rechecks every 15 seconds while visible, and review actions always trigger a fresh server-side GitHub read.
 
 ## Start the loopback service
 
@@ -52,7 +44,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m dashboard.server \
 
 Configure the existing Caddy container on that private bridge with `reverse_proxy dashboard:8787`. Only the Caddy origin publishes `127.0.0.1:18672` for the existing Cloudflare Tunnel. Use `--bind 127.0.0.1` only for direct host networking or a shared network namespace.
 
-The service has a fixed GitHub API origin, GET-only allowlist, opaque secure `HttpOnly` `SameSite=Lax` sessions, one-time session-bound OAuth state and PKCE, private/no-store responses, and restrictive browser headers. Access tokens stay in server memory and are never returned to JavaScript. An unauthorized repository read returns the same `404` shape as a missing item.
+The service has a fixed GitHub API origin, GET-only allowlist, opaque secure `HttpOnly` `SameSite=Lax` sessions, one-time session-bound OAuth state and PKCE, private/no-store responses, and restrictive browser headers. Access tokens stay in server memory and are never returned to JavaScript. A signed-in viewer without repository access receives `403` with no private item data. A viewer who needs to sign in receives `401`. Pending sign-ins expire after five minutes and new sign-ins receive `429` when the session store reaches capacity.
 
 ## Review and resume
 

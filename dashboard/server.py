@@ -29,6 +29,9 @@ FULL_SHA = re.compile(r"[0-9a-f]{40}")
 REVISION = re.compile(r"[0-9a-f]{64}")
 MAX_ARTIFACT = 256 * 1024
 SESSION_TTL = 8 * 60 * 60
+SIGN_IN_TTL = 5 * 60
+MAX_PENDING_SIGN_INS = 128
+MAX_SESSIONS = 512
 
 
 class DashboardError(RuntimeError):
@@ -44,6 +47,10 @@ class SignInRequired(NotAuthorized):
 
 
 class GitHubUnavailable(DashboardError):
+    pass
+
+
+class SessionCapacity(DashboardError):
     pass
 
 
@@ -206,30 +213,47 @@ class SessionStore:
         self.values: dict[str, Session] = {}
         self.lock = threading.Lock()
 
-    def create(self) -> tuple[str, Session]:
-        key = secrets.token_urlsafe(32)
-        session = Session(created=time.time())
+    @staticmethod
+    def expired(session: Session, now: float) -> bool:
+        ttl = SESSION_TTL if session.token else SIGN_IN_TTL
+        return now - session.created >= ttl
+
+    def create(self, *, token: str | None = None) -> tuple[str, Session]:
         with self.lock:
+            now = time.monotonic()
+            for key in [key for key, value in self.values.items() if self.expired(value, now)]:
+                del self.values[key]
+            if len(self.values) >= MAX_SESSIONS or (
+                token is None and sum(value.token is None for value in self.values.values()) >= MAX_PENDING_SIGN_INS
+            ):
+                raise SessionCapacity("sign-in capacity reached")
+            key = secrets.token_urlsafe(32)
+            session = Session(token=token, created=now)
+            if token is None:
+                session.oauth_state = secrets.token_urlsafe(32)
+                session.verifier = secrets.token_urlsafe(48)
             self.values[key] = session
-        return key, session
+            return key, session
 
     def get(self, key: str | None) -> Session | None:
         if not key:
             return None
         with self.lock:
             session = self.values.get(key)
-            if session and time.time() - session.created <= SESSION_TTL:
+            if session and not self.expired(session, time.monotonic()):
                 return session
             self.values.pop(key, None)
         return None
 
-    def rotate(self, old_key: str, session: Session) -> str:
-        new_key = secrets.token_urlsafe(32)
+    def consume_sign_in(self, key: str | None, state: str) -> str:
         with self.lock:
-            self.values.pop(old_key, None)
-            session.created = time.time()
-            self.values[new_key] = session
-        return new_key
+            session = self.values.get(key) if key else None
+            if (not session or session.token or self.expired(session, time.monotonic())
+                    or not session.oauth_state or not session.verifier
+                    or not state.isascii() or not hmac.compare_digest(state, session.oauth_state)):
+                raise NotAuthorized("OAuth state invalid")
+            del self.values[key]
+            return session.verifier
 
 
 class DashboardService:
@@ -524,15 +548,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self._headers(status, length=len(raw))
         self.wfile.write(raw)
 
-    def _session(self, create: bool = False) -> tuple[str | None, Session | None]:
+    def _session_key(self) -> str | None:
         jar = cookies.SimpleCookie(self.headers.get("Cookie", ""))
-        key = jar.get("ct_session").value if jar.get("ct_session") else None
-        session = self.app.sessions.get(key)
-        if session or not create:
-            return key, session
-        key, session = self.app.sessions.create()
-        self._pending_cookie = f"ct_session={key}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age={SESSION_TTL}"
-        return key, session
+        return jar["ct_session"].value if "ct_session" in jar else None
+
+    @staticmethod
+    def _session_cookie(key: str, ttl: int) -> str:
+        return f"ct_session={key}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age={ttl}"
 
     def _redirect(self, url: str, *, cookie: str | None = None) -> None:
         self.send_response(303)
@@ -543,7 +565,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def _token(self) -> str:
-        _, session = self._session()
+        session = self.app.sessions.get(self._session_key())
         if not session or not session.token:
             raise SignInRequired("sign in required")
         return session.token
@@ -566,6 +588,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/action-check":
                 return self._api_item(parse_qs(parsed.query), force=True)
             self._json(404, {"status": "not_found"})
+        except SessionCapacity:
+            self._json(429, {"status": "sign_in_busy", "message": "Sign-in is busy. Try again shortly."})
         except SignInRequired:
             self._json(401, {"status": "sign_in_required"})
         except NotAuthorized:
@@ -581,27 +605,21 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.wfile.write(raw)
 
     def _oauth_start(self) -> None:
-        key, session = self._session(create=True)
-        assert key and session
-        session.oauth_state = secrets.token_urlsafe(32)
-        session.verifier = secrets.token_urlsafe(48)
+        key, session = self.app.sessions.create()
         challenge = base64.urlsafe_b64encode(hashlib.sha256(session.verifier.encode()).digest()).decode().rstrip("=")
         query = urlencode({"client_id": self.app.config.client_id,
                            "redirect_uri": f"{self.app.config.origin}/auth/github/callback",
                            "state": session.oauth_state,
                            "code_challenge": challenge, "code_challenge_method": "S256"})
         self._redirect(f"https://github.com/login/oauth/authorize?{query}",
-                       cookie=getattr(self, "_pending_cookie", None))
+                       cookie=self._session_cookie(key, SIGN_IN_TTL))
 
     def _oauth_callback(self, query: dict[str, list[str]]) -> None:
-        key, session = self._session()
-        state = query.get("state", [None])[0]
-        code = query.get("code", [None])[0]
-        if not session or not code or not state or not session.oauth_state or not session.verifier \
-                or not hmac.compare_digest(state, session.oauth_state):
+        states, codes = query.get("state", []), query.get("code", [])
+        if len(states) != 1 or len(codes) != 1:
             raise NotAuthorized("OAuth state invalid")
-        verifier = session.verifier
-        session.oauth_state = session.verifier = None
+        verifier = self.app.sessions.consume_sign_in(self._session_key(), states[0])
+        code = codes[0]
         secret = self.app.read_client_secret()
         payload = urlencode({"client_id": self.app.config.client_id, "client_secret": secret,
                              "code": code, "redirect_uri": f"{self.app.config.origin}/auth/github/callback",
@@ -618,11 +636,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
         token = value.get("access_token") if isinstance(value, dict) else None
         if not isinstance(token, str) or not token:
             raise NotAuthorized("OAuth exchange failed")
-        session.token = token
-        assert key
-        rotated = self.app.sessions.rotate(key, session)
-        cookie = f"ct_session={rotated}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age={SESSION_TTL}"
-        self._redirect(f"/items/{quote(self.app.config.delivery_id)}", cookie=cookie)
+        key, _ = self.app.sessions.create(token=token)
+        self._redirect(f"/items/{quote(self.app.config.delivery_id)}",
+                       cookie=self._session_cookie(key, SESSION_TTL))
 
     def _api_item(self, query: dict[str, list[str]], *, force: bool) -> None:
         requested = query.get("revision", [None])[0]
