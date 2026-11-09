@@ -13,6 +13,7 @@ const el = (name, attrs = {}, text = null) => {
 };
 const announce = (message) => { $("live").textContent = message; };
 const isDetail = () => location.pathname.startsWith("/items/");
+const refreshInterval = 15000;
 
 function titleFor(item) {
   const labels = {
@@ -28,7 +29,16 @@ function titleFor(item) {
   return labels[item.state] || "Delivery status";
 }
 
+function scheduleRefresh(delay, revision = null) {
+  if (document.hidden) return;
+  state.timer = setTimeout(() => {
+    if (revision) announce("Checking current revision");
+    load({ force: Boolean(revision), revision });
+  }, delay);
+}
+
 async function load({ force = false, revision = null, focus = false } = {}) {
+  clearTimeout(state.timer);
   const sequence = ++state.sequence;
   const endpoint = force ? "/api/action-check" : "/api/item";
   const query = revision ? `?revision=${encodeURIComponent(revision)}` : "";
@@ -42,25 +52,24 @@ async function load({ force = false, revision = null, focus = false } = {}) {
     }
     if (response.status === 403) { renderAccessDenied(); return null; }
     const data = await response.json();
+    if (sequence !== state.sequence) return null;
     if (!response.ok || data.status === "unavailable") throw new Error("unavailable");
     if (data.status === "stale") { await load({ focus: true }); return null; }
     state.revision = data.revision;
     state.item = data.item;
     state.expires = Date.now() + data.fresh_for_ms;
     sessionStorage.removeItem("oauth-attempted");
-    clearTimeout(state.timer);
-    if (data.fresh_for_ms > 0 && data.item.review) {
-      state.timer = setTimeout(() => {
-        withdrawActions("Checking current revision…");
-        announce("Checking current revision");
-        load({ force: true, revision: state.revision });
-      }, data.fresh_for_ms);
+    if (data.item.review) {
+      scheduleRefresh(Math.min(refreshInterval, data.fresh_for_ms), data.revision);
+    } else if (["revision_changed", "github_unavailable", "evidence_unavailable"].includes(data.item.state)) {
+      scheduleRefresh(refreshInterval);
     }
     render(data.item, focus);
     return data;
   } catch (_) {
     if (sequence !== state.sequence) return null;
     renderUnavailable();
+    scheduleRefresh(refreshInterval);
     return null;
   }
 }
@@ -216,6 +225,9 @@ $("mobile-back").addEventListener("click", (event) => {
 });
 window.addEventListener("popstate", () => { document.body.classList.toggle("detail-route", isDetail());
   if (!isDetail()) requestAnimationFrame(() => (state.originLink || $("inbox-title")).focus()); });
-document.addEventListener("visibilitychange", () => { if (!document.hidden) load({ focus: false }); });
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) clearTimeout(state.timer);
+  else load({ force: Boolean(state.item?.review), revision: state.item?.review ? state.revision : null });
+});
 window.addEventListener("focus", () => { if (Date.now() >= state.expires) load(); });
 load({ focus: isDetail() });

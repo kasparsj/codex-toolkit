@@ -23,7 +23,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m dashboard.export_snapshot \
   --inbox "$DASHBOARD_INBOX"
 ```
 
-Run the exporter under the operator's supervisor during the trial. It sends a fresh snapshot over SSH every 10 seconds. Each SSH attempt times out after 10 seconds. A failed projection or transfer leaves the last complete snapshot in place and retries after 10 seconds. The snapshot expires after 30 seconds, at which point the dashboard suspends review controls. The browser rechecks every 15 seconds while visible, and review actions always trigger a fresh server-side GitHub read.
+Run the exporter under the operator's supervisor during the trial. It sends a fresh snapshot over SSH every 10 seconds. Each SSH attempt times out after 10 seconds. A failed projection or transfer leaves the last complete snapshot in place and retries after 10 seconds. The snapshot expires after 30 seconds, at which point the dashboard suspends review controls. The browser rechecks actionable reviews within 15 seconds while visible and retries unavailable data on the same interval. Review actions always trigger a fresh server-side GitHub read.
 
 ## Start the loopback service
 

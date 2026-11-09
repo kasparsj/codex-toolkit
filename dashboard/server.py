@@ -337,7 +337,10 @@ class DashboardService:
         repo_url = f"https://github.com/{self.repo}"
         response: dict[str, Any] = {
             "status": "ok", "revision": opened_revision,
-            "fresh_for_ms": 15000, "generated_at": snapshot["generated_at"],
+            "fresh_for_ms": max(0, min(15000, int(
+                (parse_time(current["expires_at"]) - utcnow()).total_seconds() * 1000
+            ))),
+            "generated_at": snapshot["generated_at"],
             "item": {
                 "id": f"{self.repo}:{self.delivery_id}:plan", "repo": self.repo,
                 "delivery_id": self.delivery_id, "issue": issue, "issue_title": issue_title,
