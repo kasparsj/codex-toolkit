@@ -637,6 +637,11 @@ class Coordinator:
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(prog="github-delivery")
     sub = result.add_subparsers(dest="command", required=True)
+    preview = sub.add_parser("run", help="preview issue ranking")
+    preview.add_argument("repo")
+    preview.add_argument("--preview", action="store_true", required=True)
+    preview.add_argument("--provisional-policy", type=Path)
+    preview.add_argument("--documentation-only", action="store_true")
     start = sub.add_parser("start")
     start.add_argument("--state-dir", type=Path, required=True); start.add_argument("--repo", required=True)
     start.add_argument("--issue", type=int); start.add_argument("--delivery-id")
@@ -862,6 +867,12 @@ def resume_app(coordinator: Coordinator, args) -> dict[str, Any]:
 
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
+    if args.command == "run":
+        from preview import run
+
+        value = run(args.repo, args.provisional_policy, documentation_only=args.documentation_only)
+        print(json.dumps(value, sort_keys=True))
+        return 2 if value["status"] == "coverage_incomplete" else 0
     try:
         coordinator = Coordinator(args.state_dir)
         if args.command == "start":
