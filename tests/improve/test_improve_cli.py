@@ -326,6 +326,15 @@ json.dump(response, sys.stdout)
         self.assertEqual(output["status"], "drafts_ready")
         self.assertEqual([draft["id"] for draft in output["drafts"]], ["F1"])
         self.assertNotIn("DIRTY WORKTREE", output["drafts"][0]["body"])
+        self.assertTrue(output["drafts"][0]["body"].endswith("Source: Improve\n"))
+        draft_reviews = [
+            packet for packet in map(json.loads, self.review_log.read_text().splitlines())
+            if packet["phase"] == "draft"
+        ]
+        self.assertEqual(draft_reviews[0]["evidence"], {
+            "title": output["drafts"][0]["title"],
+            "body": output["drafts"][0]["body"],
+        })
         self.assertTrue(server.requests)
         self.assertEqual({method for method, _path in server.requests}, {"GET"})
 

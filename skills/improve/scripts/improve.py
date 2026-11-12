@@ -211,6 +211,7 @@ def render(binding, candidate, related):
     lines.extend(["", "## Acceptance criteria", ""])
     for check in c["acceptance"]:
         lines.append(f"- [ ] {plain(check['action'])} → {plain(check['expected'])}")
+    lines.extend(["", "Source: Improve"])
     body = "\n".join(lines) + "\n"
     require(len(body.encode("utf-8")) <= 12 * 1024)
     return {"title": c["title"], "body": body}
