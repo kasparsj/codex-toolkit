@@ -108,7 +108,7 @@ class _Reader:
         url = f"{self.origin}{path}" + (f"?{query}" if query else "")
         headers = {
             "Accept": "application/vnd.github+json",
-            "User-Agent": "codex-toolkit-improve-read/1",
+            "User-Agent": "codex-skills-improve-read/1",
             "X-GitHub-Api-Version": "2022-11-28",
         }
         token = os.environ.get("IMPROVE_READ_TOKEN")

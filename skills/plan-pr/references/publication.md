@@ -2,8 +2,6 @@
 
 Use this procedure when the user asks to publish or invokes `$plan-pr` for a new plan without `--local`. Use authenticated GitHub access and git for the intended repository. In GitHub CLI commands, set `--repo HOST/OWNER/REPO` explicitly. Match the git push destination to the same repo or to a fork the user or repo workflow authorizes. If publication is unavailable, preserve the local artifacts and report where they are.
 
-For the controlled [repository-scoped Delivery workflow](../../../docs/paseo-delivery-v2/repository-experience.md), this direct publication procedure is replaced by the shared deterministic publisher. The agent produces only the validated local plan manifest without GitHub write credentials. The publisher records each exact intent before push/create/edit, reads it back, and reconciles an ambiguous response by exact repository, head, expected SHA, base, delivery ID, and plan provenance. Preserve the ordinary interactive procedure below outside that workflow.
-
 ## Resolve the draft and branch
 
 1. For a new proposal, re-read the issue state when applicable and check for open PRs covering the same issue or written brief on the intended base. Reuse an existing PR only after verifying that it is open and in draft, its diff consists of planning artifacts, and its handoff and proposal still match the requested scope and current baseline. Report a stale or ready-for-review match as competing work and resolve it before creating another PR. For an explicit revision, verify that the identified PR is open, in draft, and planning-only. Resolve multiple matches or changes to the revision target before writing.

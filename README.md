@@ -1,29 +1,18 @@
-# Codex Toolkit
+# Codex Skills
 
-Use Codex to audit repositories, triage feedback, take a GitHub issue from selection through PR review, or hand work off to a fresh agent or chat. Invoke individual skills in Codex, or use repository-scoped Delivery in Paseo to coordinate the issue-to-PR sequence.
+Use Codex to audit repositories, triage feedback, take a GitHub issue from selection through PR review, or hand work off to a fresh agent or chat. Invoke individual skills in Codex.
 
 ## Install the interactive skills
 
 With Node.js 22.20 or later, install all skills for Codex.
 
 ```bash
-npx skills add kasparsj/codex-toolkit --skill '*' -a codex -g
+npx skills add kasparsj/codex-skills --skill '*' -a codex -g
 ```
 
 Omit `-g` for a project-only install. [Skills CLI reference](https://github.com/vercel-labs/skills/blob/main/docs/commands.md#skills-add)
 
 In a Codex chat, replace `owner/repo` with your repository and try `$next-issue owner/repo --rank`. This returns a shortlist and a recommended issue without writing to GitHub.
-
-## Use repository-scoped Delivery
-
-Delivery now runs through the TypeScript/TSX Paseo plugin. From a Git workspace,
-enter `/delivery` to open or focus that repository's native dashboard. Opening,
-switching to, or closing the panel does not start work; use the panel's explicit
-runner controls. Setup, repository identity, background lifetime, and recovery
-are covered in the [repository experience guide](docs/paseo-delivery-v2/repository-experience.md).
-
-The engine and plugin require Node.js 22.19 or later. Their source-development
-and verification commands are documented in the [Delivery package README](packages/delivery/README.md).
 
 ## Interactive GitHub skills
 
@@ -53,9 +42,3 @@ Improve uses Python 3.10+, Git and a configured independent reviewer. Its bundle
 | [`client-feedback-triage`](skills/client-feedback-triage/SKILL.md) | `$client-feedback-triage Draft issue changes from the feedback below.` | Check feedback against the codebase and existing issues, then draft a change set for review. Publishing requires authorization. |
 | [`handoff`](skills/handoff/SKILL.md) | `$handoff Implement the agreed CSV export change.` | Assess whether fresh context would help, then continue in place or delegate to a fresh native Codex executor and verify its result. Delegation requires native subagent support. |
 | [`fresh-handoff`](skills/fresh-handoff/SKILL.md) | `$fresh-handoff Continue the CSV export fix.` | Start a new Codex desktop chat with a standalone brief derived from the source chat. |
-
-## Repository delivery workflow
-
-The [TypeScript Delivery runtime](packages/delivery/README.md) coordinates the four GitHub skills as a resumable, repository-scoped run with repository policy and optional plan and implementation review gates. An isolated publisher handles GitHub writes. The run ends with a read-only PR readiness check.
-
-Use `/delivery` in a Paseo Git workspace and follow the [repository experience guide](docs/paseo-delivery-v2/repository-experience.md) for setup, controls, durable background state, and safe recovery.
