@@ -1,10 +1,12 @@
 ---
 name: handoff
-description: Delegate one authorized implementation task to a fresh Codex subagent with a self-contained brief, then verify the result in the parent chat. Use when the user asks to hand off implementation to a fresh agent.
+description: Assess whether an authorized implementation task benefits from fresh context, then continue in place or delegate to a fresh Codex subagent and verify its result. Use when the user asks to hand off implementation.
 license: MIT
 ---
 
 # Handoff
+
+0. **Choose whether to hand off.** Assess whether fresh context would materially improve the next task. Continue in the current chat when the task is clear, the relevant context remains useful, and a handoff would mainly add overhead. Favor a fresh executor when unrelated history, abandoned approaches, or conflicting assumptions hinder the task, or when a self-contained next phase benefits from context isolation. Honor an explicit request for a fresh agent; invoking the skill alone requests this assessment. State the choice and one short reason, then execute it without a confirmation round. If continuing here, implement and verify the authorized task directly; skip the dispatch steps below. A fresh executor starts with its own context and does not reset the parent chat.
 
 1. **Check readiness and prepare the brief.** Inspect the relevant conversation, code, repository instructions, and Git state. A task is ready when one executor can implement and verify it within a clear scope without making major product or architecture decisions. If important decisions are still open, plan in the parent chat and resolve them before spawning the executor. If the task is ready, proceed directly to the brief.
 

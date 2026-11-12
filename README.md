@@ -99,7 +99,7 @@ Improve uses Python 3.10+, Git and a configured independent reviewer. Its bundle
 | Skill | Example | When to use it |
 | --- | --- | --- |
 | [`client-feedback-triage`](skills/client-feedback-triage/SKILL.md) | `$client-feedback-triage Draft issue changes from the feedback below.` | Check feedback against the codebase and existing issues, then draft a change set for review. Publishing requires authorization. |
-| [`handoff`](skills/handoff/SKILL.md) | `$handoff Implement the agreed CSV export change.` | Delegate to a fresh native Codex executor and verify its result in the current chat. Requires native subagent support. |
+| [`handoff`](skills/handoff/SKILL.md) | `$handoff Implement the agreed CSV export change.` | Assess whether fresh context would help, then continue in place or delegate to a fresh native Codex executor and verify its result. Delegation requires native subagent support. |
 | [`fresh-handoff`](skills/fresh-handoff/SKILL.md) | `$fresh-handoff Continue the CSV export fix.` | Start a new Codex desktop chat with a standalone brief derived from the source chat. |
 
 ## Executable GitHub delivery workflow
