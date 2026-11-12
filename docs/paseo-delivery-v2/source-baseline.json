@@ -1,0 +1,126 @@
+{
+  "scope": "local-developer-mode",
+  "userCorrection": "replacement is meant for what was planned as local dev mode, not the github app",
+  "recordedAt": "2026-11-11",
+  "sources": [
+    {
+      "path": "/Users/kasparsj/Work2/worktrees/codex-toolkit-dashboard-plan/.omx/plans/foreground/contract/VAL-FG-AUTH.md",
+      "sha256": "014f8e52ca6fd915a2e142ffa4875a62ec793e0dcc9bca90da9c32ee578a5f73",
+      "role": "planned-local-mode-reference"
+    },
+    {
+      "path": "/Users/kasparsj/Work2/worktrees/codex-toolkit-dashboard-plan/.omx/plans/foreground/contract/VAL-FG-DISPATCH.md",
+      "sha256": "ee94fbca48d2b906001c7b719d3f9b61f55d79cfb755d57782e3f86e31598b8c",
+      "role": "planned-local-mode-reference"
+    },
+    {
+      "path": "/Users/kasparsj/Work2/worktrees/codex-toolkit-dashboard-plan/.omx/plans/foreground/contract/VAL-FG-DRAFTS.md",
+      "sha256": "473a6cfaba08b7adf727b6c7f6dd21458497d6bf4916b85098a6605bbcb1b987",
+      "role": "planned-local-mode-reference"
+    },
+    {
+      "path": "/Users/kasparsj/Work2/worktrees/codex-toolkit-dashboard-plan/.omx/plans/foreground/contract/VAL-FG-GATES.md",
+      "sha256": "4e26d12cb2714f608d49119e7b0b9bcb324e366f4fd72fd52feb3927160635f9",
+      "role": "planned-local-mode-reference"
+    },
+    {
+      "path": "/Users/kasparsj/Work2/worktrees/codex-toolkit-dashboard-plan/.omx/plans/foreground/contract/VAL-FG-LIFECYCLE.md",
+      "sha256": "50a08aab5464cecb40e2e9ec009e3bed90af23d3b04e323cac30bffd1e49f101",
+      "role": "planned-local-mode-reference"
+    },
+    {
+      "path": "/Users/kasparsj/Work2/worktrees/codex-toolkit-dashboard-plan/.omx/plans/foreground/contract/VAL-FG-POLL.md",
+      "sha256": "9183b5bc8489926e2fa9de251328a26ccf91229100c4cf97a689c69ccd0b05b2",
+      "role": "planned-local-mode-reference"
+    },
+    {
+      "path": "/Users/kasparsj/Work2/worktrees/codex-toolkit-dashboard-plan/.omx/plans/foreground/contract/VAL-FG-PUBLISH-ISSUE.md",
+      "sha256": "fa0f5db8da2ac93fe7b1702c59af44c75c4f3c20bfdb40da6cbd09cb7a75e164",
+      "role": "planned-local-mode-reference"
+    },
+    {
+      "path": "/Users/kasparsj/Work2/worktrees/codex-toolkit-dashboard-plan/.omx/plans/foreground/contract/VAL-FG-PUBLISH-PR.md",
+      "sha256": "9421d09902bf26cb16608fc39ba40d9232606f5b94587877303f12e5a37d432a",
+      "role": "planned-local-mode-reference"
+    },
+    {
+      "path": "/Users/kasparsj/Work2/worktrees/codex-toolkit-dashboard-plan/.omx/plans/foreground/contract/VAL-FG-START.md",
+      "sha256": "8417ad2e22daa818506b47bf06634df8b976e9b61b3c6044c0ee9f274a01763b",
+      "role": "planned-local-mode-reference"
+    },
+    {
+      "path": "/Users/kasparsj/Work2/worktrees/codex-toolkit-dashboard-plan/.omx/plans/foreground/prd.md",
+      "sha256": "ee430c164343a11ee0e8d685b699b210a7476963a7846ffea882111b2a2b5c51",
+      "role": "planned-local-mode-reference"
+    },
+    {
+      "path": "/Users/kasparsj/Work2/worktrees/codex-toolkit-dashboard-plan/.omx/plans/foreground/review.md",
+      "sha256": "29e8d2981b71265448421b17a82c19beaad2c8dd13089ffc0864f5333886d509",
+      "role": "planned-local-mode-reference"
+    },
+    {
+      "path": "/Users/kasparsj/Work2/worktrees/codex-toolkit-dashboard-plan/.omx/plans/foreground/test-spec.md",
+      "sha256": "ffe65d11081919ef9daf421a0d2e7c3f169c3a5d8a4ad692072e9c615c8367ec",
+      "role": "planned-local-mode-reference"
+    },
+    {
+      "path": "/Users/kasparsj/Work2/worktrees/codex-toolkit-foreground/codex_toolkit/__init__.py",
+      "sha256": "4a3be5bd5799bcb909408b011e90a7488e7c31089df97cbb2b8df54b8e0d833d",
+      "role": "planned-local-mode-reference"
+    },
+    {
+      "path": "/Users/kasparsj/Work2/worktrees/codex-toolkit-foreground/codex_toolkit/dashboard_store.py",
+      "sha256": "a189a19c4044a7958fb1b81042cdb88ca99efa4432bcad2341792cde255f89f3",
+      "role": "planned-local-mode-reference"
+    },
+    {
+      "path": "/Users/kasparsj/Work2/worktrees/codex-toolkit-foreground/codex_toolkit/delivery_cli.py",
+      "sha256": "5c9639a195f50276661fea5d65c0c6c4dc688394827db0068db450ecbff76486",
+      "role": "planned-local-mode-reference"
+    },
+    {
+      "path": "/Users/kasparsj/Work2/worktrees/codex-toolkit-foreground/codex_toolkit/foreground.py",
+      "sha256": "5dec5fb678a14099fdb20574731e73496cefbb132e0a17663ab74caaf6224f76",
+      "role": "planned-local-mode-reference"
+    },
+    {
+      "path": "/Users/kasparsj/Work2/worktrees/codex-toolkit-foreground/codex_toolkit/foreground_auth.py",
+      "sha256": "1a0a877dc33efbc715ade15a644e3ea710cfa9466fadaf9077cce3a4fef61db2",
+      "role": "planned-local-mode-reference"
+    },
+    {
+      "path": "/Users/kasparsj/Work2/worktrees/codex-toolkit-foreground/codex_toolkit/foreground_issue.py",
+      "sha256": "a64dd3aaba14374ef85ef7d1f63f079caf159f48a864bdf6d29fb5bc1d7d8ec8",
+      "role": "planned-local-mode-reference"
+    },
+    {
+      "path": "/Users/kasparsj/Work2/worktrees/codex-toolkit-foreground/codex_toolkit/foreground_pr.py",
+      "sha256": "22bf52d18553c05dbcdcb79b138c2563b6254fe9e92203d0780d47533e5b8787",
+      "role": "planned-local-mode-reference"
+    },
+    {
+      "path": "/Users/kasparsj/Work2/worktrees/codex-toolkit-foreground/codex_toolkit/foreground_publication.py",
+      "sha256": "e32a29e960614a36b6c7349bf9be532cc925d7c3e920fd200ad984c01d4f7d5c",
+      "role": "planned-local-mode-reference"
+    },
+    {
+      "path": "/Users/kasparsj/Work2/worktrees/codex-toolkit-foreground/codex_toolkit/local_dashboard.py",
+      "sha256": "0dc5e9f47e15c31e7acbb09abc27ff097d7f0e795f22833d7db0c6beae976a44",
+      "role": "planned-local-mode-reference"
+    },
+    {
+      "path": "/Users/kasparsj/Work2/worktrees/codex-toolkit-foreground/codex_toolkit/local_drafts.py",
+      "sha256": "e75c2ab1ce136514aeee96a7b066f7aa532a8d42aaeeae3d039a3182da348e83",
+      "role": "planned-local-mode-reference"
+    },
+    {
+      "path": "/Users/kasparsj/Work2/worktrees/codex-toolkit-foreground/codex_toolkit/resources.py",
+      "sha256": "379add8e62b93e9baace354469b0e69553df80e47091b2d9cf83d883fcdaa481",
+      "role": "planned-local-mode-reference"
+    }
+  ],
+  "legacyAppReference": "superseded-app-parity/source-baseline.json",
+  "referenceOnly": true,
+  "currentMainAfterUserRequestedPull": "08c17bcfd04b1cf2963040bc23574498cd8461e2",
+  "pullNote": "Local main fast-forwarded from17f1f20; original dirty work preserved in stash00d239c and private backup, upstream supersets resolved, unique test edits retained."
+}

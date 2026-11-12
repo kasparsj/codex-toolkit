@@ -1,6 +1,6 @@
 # Codex Toolkit
 
-Use Codex to audit repositories, triage feedback, take a GitHub issue from selection through PR review, or hand work off to a fresh agent or chat. Invoke individual skills in Codex, or use the separately configured GitHub delivery runner to coordinate the issue-to-PR sequence.
+Use Codex to audit repositories, triage feedback, take a GitHub issue from selection through PR review, or hand work off to a fresh agent or chat. Invoke individual skills in Codex, or use repository-scoped Delivery in Paseo to coordinate the issue-to-PR sequence.
 
 ## Install the interactive skills
 
@@ -14,64 +14,16 @@ Omit `-g` for a project-only install. [Skills CLI reference](https://github.com/
 
 In a Codex chat, replace `owner/repo` with your repository and try `$next-issue owner/repo --rank`. This returns a shortlist and a recommended issue without writing to GitHub.
 
-## Install the GitHub delivery CLI
+## Use repository-scoped Delivery
 
-Build and install the versioned wheel with Python 3.11 or later. `uv tool`
-keeps the command's interpreter independent of the `python3` selected by the
-target checkout or the shell.
+Delivery now runs through the TypeScript/TSX Paseo plugin. From a Git workspace,
+enter `/delivery` to open or focus that repository's native dashboard. Opening,
+switching to, or closing the panel does not start work; use the panel's explicit
+runner controls. Setup, repository identity, background lifetime, and recovery
+are covered in the [repository experience guide](docs/paseo-delivery-v2/repository-experience.md).
 
-```sh
-uv build --python 3.11
-uv tool install --python 3.11 dist/codex_toolkit-0.1.0-py3-none-any.whl
-codex-toolkit delivery --help
-```
-
-The same package can be installed directly from a reviewed, full revision in a
-local clone:
-
-```sh
-uv tool install --python 3.11 \
-  "codex-toolkit @ git+file:///absolute/path/to/codex-toolkit@FULL_COMMIT_SHA"
-```
-
-Create the owner-controlled developer profile described in the [delivery
-guide](workflows/github-delivery/README.md#developer-mediated-delivery). Pass
-its absolute path explicitly, or store it at
-`~/.config/codex-toolkit/delivery/<owner>/<repo>.json`, with the owner and
-repository lowercased. Then run the installed workflow from the target
-checkout:
-
-```sh
-codex-toolkit delivery doctor --repo OWNER/REPO \
-  --agent-launcher /absolute/path/launcher \
-  --worktree /absolute/path/dedicated-checkout \
-  --agent-scratch /absolute/path/scratch \
-  --container-image IMAGE@sha256:DIGEST
-codex-toolkit delivery preview --repo OWNER/REPO
-codex-toolkit delivery start --repo OWNER/REPO --issue NUMBER \
-  --agent-launcher /absolute/path/launcher \
-  --worktree /absolute/path/dedicated-checkout \
-  --agent-scratch /absolute/path/scratch \
-  --container-image IMAGE@sha256:DIGEST
-codex-toolkit delivery status --repo OWNER/REPO
-codex-toolkit delivery resume --repo OWNER/REPO
-```
-
-Use `--developer-config /absolute/path/developer.json` after any subcommand to
-override profile discovery. `status`, `resume`, and `recover` accept an optional
-`--delivery-id`. Doctor reports omitted delivery inputs as full-delivery
-blockers while retaining its separate preview-readiness result. Preserve the
-installed version recorded by an active run. If a hard kill leaves the
-coordinator recorded as running, ordinary `resume` refuses the state. After
-proving the recorded process has exited, run:
-
-```sh
-codex-toolkit delivery recover --repo OWNER/REPO \
-  --developer-config /absolute/path/developer.json \
-  --delivery-id DELIVERY_ID
-```
-
-Then continue with `resume`.
+The engine and plugin require Node.js 22.19 or later. Their source-development
+and verification commands are documented in the [Delivery package README](packages/delivery/README.md).
 
 ## Interactive GitHub skills
 
@@ -102,8 +54,8 @@ Improve uses Python 3.10+, Git and a configured independent reviewer. Its bundle
 | [`handoff`](skills/handoff/SKILL.md) | `$handoff Implement the agreed CSV export change.` | Assess whether fresh context would help, then continue in place or delegate to a fresh native Codex executor and verify its result. Delegation requires native subagent support. |
 | [`fresh-handoff`](skills/fresh-handoff/SKILL.md) | `$fresh-handoff Continue the CSV export fix.` | Start a new Codex desktop chat with a standalone brief derived from the source chat. |
 
-## Executable GitHub delivery workflow
+## Repository delivery workflow
 
-The [GitHub delivery runner](workflows/github-delivery/README.md) coordinates the four GitHub skills as a resumable run with repository policy and optional plan and implementation review gates. An isolated publisher handles GitHub writes. The run ends with a read-only PR readiness check.
+The [TypeScript Delivery runtime](packages/delivery/README.md) coordinates the four GitHub skills as a resumable, repository-scoped run with repository policy and optional plan and implementation review gates. An isolated publisher handles GitHub writes. The run ends with a read-only PR readiness check.
 
-The runner has its own setup. Follow the guide to configure Python 3.11+, pinned Spec Kit, repository policy, and the agent and publisher launchers.
+Use `/delivery` in a Paseo Git workspace and follow the [repository experience guide](docs/paseo-delivery-v2/repository-experience.md) for setup, controls, durable background state, and safe recovery.

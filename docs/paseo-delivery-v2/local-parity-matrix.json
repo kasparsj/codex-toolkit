@@ -1,0 +1,407 @@
+[
+  {
+    "source": "VAL-FG-START",
+    "activeTargets": [
+      "VAL-LOCAL-START"
+    ],
+    "v2Evidence": [
+      "docs/paseo-delivery-v2/evidence/repository-experience/final-acceptance.json",
+      ".omx/evidence/repository-delivery/candidate-31-checks/package-tests.log",
+      "/private/tmp/delivery-real-model-final-OWFgS1/real-model-journey-20261112134116-eb4e03d5bd/before-start.json",
+      ".omx/evidence/repository-delivery/candidate-31-checks/checks.json",
+      ".omx/evidence/repository-delivery/candidate-31-checks/source-equivalence.json"
+    ],
+    "verdict": "proven-for-C31",
+    "disposition": "retained in portable TypeScript engine and CLI",
+    "criterionStatus": [
+      {
+        "id": "VAL-LOCAL-START",
+        "status": "proven-for-C31"
+      }
+    ],
+    "acceptanceLimit": "Local developer scope. Named C31 checks and direct receipts are bound to exact source hashes; older direct receipts carry only through the documented unchanged-component mapping. No remote GitHub, App-only, production or Python-retirement claim.",
+    "candidateManifest": ".omx/evidence/repository-delivery/candidate-31.json",
+    "candidateManifestSha256": "f6e2987e7934091f61bf70480cb8591898e58f0c4c35e6fee526314dfbd9c362"
+  },
+  {
+    "source": "VAL-FG-DISPATCH",
+    "activeTargets": [
+      "VAL-LOCAL-DISPATCH",
+      "VAL-LOCAL-RANK"
+    ],
+    "v2Evidence": [
+      "docs/paseo-delivery-v2/evidence/repository-experience/final-acceptance.json",
+      ".omx/evidence/repository-delivery/candidate-31-checks/package-tests.log",
+      ".omx/evidence/repository-delivery/candidate-31-checks/checks.json",
+      ".omx/evidence/repository-delivery/candidate-31-checks/source-equivalence.json"
+    ],
+    "verdict": "proven-for-C31",
+    "disposition": "retained in portable TypeScript engine and CLI",
+    "criterionStatus": [
+      {
+        "id": "VAL-LOCAL-DISPATCH",
+        "status": "proven-for-C31"
+      },
+      {
+        "id": "VAL-LOCAL-RANK",
+        "status": "proven-for-C31"
+      }
+    ],
+    "acceptanceLimit": "Local developer scope. Named C31 checks and direct receipts are bound to exact source hashes; older direct receipts carry only through the documented unchanged-component mapping. No remote GitHub, App-only, production or Python-retirement claim.",
+    "candidateManifest": ".omx/evidence/repository-delivery/candidate-31.json",
+    "candidateManifestSha256": "f6e2987e7934091f61bf70480cb8591898e58f0c4c35e6fee526314dfbd9c362"
+  },
+  {
+    "source": "VAL-FG-POLL",
+    "activeTargets": [
+      "VAL-LOCAL-POLL"
+    ],
+    "v2Evidence": [
+      "docs/paseo-delivery-v2/evidence/repository-experience/final-acceptance.json",
+      ".omx/evidence/repository-delivery/candidate-31-checks/package-tests.log",
+      ".omx/evidence/repository-delivery/candidate-31-checks/checks.json",
+      ".omx/evidence/repository-delivery/candidate-31-checks/source-equivalence.json"
+    ],
+    "verdict": "proven-for-C31",
+    "disposition": "retained in portable TypeScript engine and CLI",
+    "criterionStatus": [
+      {
+        "id": "VAL-LOCAL-POLL",
+        "status": "proven-for-C31"
+      }
+    ],
+    "acceptanceLimit": "Local developer scope. Named C31 checks and direct receipts are bound to exact source hashes; older direct receipts carry only through the documented unchanged-component mapping. No remote GitHub, App-only, production or Python-retirement claim.",
+    "candidateManifest": ".omx/evidence/repository-delivery/candidate-31.json",
+    "candidateManifestSha256": "f6e2987e7934091f61bf70480cb8591898e58f0c4c35e6fee526314dfbd9c362"
+  },
+  {
+    "source": "VAL-FG-LIFECYCLE",
+    "activeTargets": [
+      "VAL-LOCAL-LIFECYCLE",
+      "VAL-LOCAL-RECOVERY"
+    ],
+    "v2Evidence": [
+      "docs/paseo-delivery-v2/evidence/repository-experience/final-acceptance.json",
+      ".omx/evidence/repository-delivery/candidate-31-checks/package-tests.log",
+      "/private/tmp/delivery-integrated-pi-final.V8nT9c/integrated-pi-final-20261112133657-84ff9a294c/report.json",
+      ".omx/evidence/repository-delivery/candidate-31-checks/checks.json",
+      ".omx/evidence/repository-delivery/candidate-31-checks/source-equivalence.json",
+      "/private/tmp/delivery-real-model-final-OWFgS1/real-model-journey-20261112134116-eb4e03d5bd/implementation-recovery-continuity.json"
+    ],
+    "verdict": "proven-for-C31",
+    "disposition": "retained in portable TypeScript engine and CLI",
+    "criterionStatus": [
+      {
+        "id": "VAL-LOCAL-LIFECYCLE",
+        "status": "proven-for-C31"
+      },
+      {
+        "id": "VAL-LOCAL-RECOVERY",
+        "status": "proven-for-C31"
+      }
+    ],
+    "acceptanceLimit": "Local developer scope. Named C31 checks and direct receipts are bound to exact source hashes; older direct receipts carry only through the documented unchanged-component mapping. No remote GitHub, App-only, production or Python-retirement claim.",
+    "candidateManifest": ".omx/evidence/repository-delivery/candidate-31.json",
+    "candidateManifestSha256": "f6e2987e7934091f61bf70480cb8591898e58f0c4c35e6fee526314dfbd9c362"
+  },
+  {
+    "source": "VAL-FG-GATES",
+    "activeTargets": [
+      "VAL-LOCAL-GATES",
+      "VAL-LOCAL-CHECKS",
+      "VAL-LOCAL-HANDOFF"
+    ],
+    "v2Evidence": [
+      "docs/paseo-delivery-v2/evidence/repository-experience/final-acceptance.json",
+      ".omx/evidence/repository-delivery/candidate-31-checks/package-tests.log",
+      ".omx/evidence/repository-delivery/candidate-31-checks/checks.json",
+      ".omx/evidence/repository-delivery/candidate-31-checks/source-equivalence.json",
+      "/private/tmp/delivery-real-model-final-OWFgS1/real-model-journey-20261112134116-eb4e03d5bd/manual-ready-checkpoint.json",
+      "/private/tmp/delivery-real-model-final-OWFgS1/real-model-journey-20261112134116-eb4e03d5bd/tracking-checkpoint.json"
+    ],
+    "verdict": "proven-for-C31",
+    "disposition": "retained in portable TypeScript engine and CLI",
+    "criterionStatus": [
+      {
+        "id": "VAL-LOCAL-GATES",
+        "status": "proven-for-C31"
+      },
+      {
+        "id": "VAL-LOCAL-CHECKS",
+        "status": "proven-for-C31"
+      },
+      {
+        "id": "VAL-LOCAL-HANDOFF",
+        "status": "proven-for-C31"
+      }
+    ],
+    "acceptanceLimit": "Local developer scope. Named C31 checks and direct receipts are bound to exact source hashes; older direct receipts carry only through the documented unchanged-component mapping. No remote GitHub, App-only, production or Python-retirement claim.",
+    "candidateManifest": ".omx/evidence/repository-delivery/candidate-31.json",
+    "candidateManifestSha256": "f6e2987e7934091f61bf70480cb8591898e58f0c4c35e6fee526314dfbd9c362"
+  },
+  {
+    "source": "VAL-FG-AUTH",
+    "activeTargets": [
+      "VAL-LOCAL-AUTH"
+    ],
+    "v2Evidence": [
+      "docs/paseo-delivery-v2/evidence/repository-experience/final-acceptance.json",
+      ".omx/evidence/repository-delivery/candidate-31-checks/package-tests.log",
+      "/private/tmp/delivery-real-model-final-OWFgS1/real-model-journey-20261112134116-eb4e03d5bd/host-environment-metadata.json",
+      ".omx/evidence/repository-delivery/candidate-31-checks/checks.json",
+      ".omx/evidence/repository-delivery/candidate-31-checks/source-equivalence.json"
+    ],
+    "verdict": "proven-for-C31",
+    "disposition": "retained in portable TypeScript engine and CLI",
+    "criterionStatus": [
+      {
+        "id": "VAL-LOCAL-AUTH",
+        "status": "proven-for-C31"
+      }
+    ],
+    "acceptanceLimit": "Local developer scope. Named C31 checks and direct receipts are bound to exact source hashes; older direct receipts carry only through the documented unchanged-component mapping. No remote GitHub, App-only, production or Python-retirement claim.",
+    "candidateManifest": ".omx/evidence/repository-delivery/candidate-31.json",
+    "candidateManifestSha256": "f6e2987e7934091f61bf70480cb8591898e58f0c4c35e6fee526314dfbd9c362"
+  },
+  {
+    "source": "VAL-FG-DRAFTS",
+    "activeTargets": [
+      "VAL-LOCAL-DRAFTS",
+      "VAL-LOCAL-INDEX"
+    ],
+    "v2Evidence": [
+      "docs/paseo-delivery-v2/evidence/repository-experience/final-acceptance.json",
+      ".omx/evidence/repository-delivery/candidate-31-checks/package-tests.log",
+      ".omx/evidence/repository-delivery/candidate-21-checks/proposal-publication.json",
+      ".omx/evidence/repository-delivery/candidate-31-checks/checks.json",
+      ".omx/evidence/repository-delivery/candidate-31-checks/source-equivalence.json",
+      ".omx/evidence/repository-delivery/candidate-26-checks/index-rpc/result.json",
+      ".omx/evidence/repository-delivery/candidate-26-checks/index-rpc/recheck.mjs",
+      ".omx/evidence/repository-delivery/candidate-27-checks/independent-source-review.md"
+    ],
+    "verdict": "proven-for-C31",
+    "disposition": "retained in portable TypeScript engine and CLI",
+    "criterionStatus": [
+      {
+        "id": "VAL-LOCAL-DRAFTS",
+        "status": "proven-for-C31"
+      },
+      {
+        "id": "VAL-LOCAL-INDEX",
+        "status": "proven-for-C31"
+      }
+    ],
+    "acceptanceLimit": "Local developer scope. Named C31 checks and direct receipts are bound to exact source hashes; older direct receipts carry only through the documented unchanged-component mapping. No remote GitHub, App-only, production or Python-retirement claim.",
+    "candidateManifest": ".omx/evidence/repository-delivery/candidate-31.json",
+    "candidateManifestSha256": "f6e2987e7934091f61bf70480cb8591898e58f0c4c35e6fee526314dfbd9c362"
+  },
+  {
+    "source": "VAL-FG-PUBLISH-PR",
+    "activeTargets": [
+      "VAL-LOCAL-GRANTS",
+      "VAL-LOCAL-GIT",
+      "VAL-LOCAL-PUBLISH-PR"
+    ],
+    "v2Evidence": [
+      "docs/paseo-delivery-v2/evidence/repository-experience/final-acceptance.json",
+      ".omx/evidence/repository-delivery/candidate-31-checks/package-tests.log",
+      ".omx/evidence/repository-delivery/candidate-31-checks/checks.json",
+      ".omx/evidence/repository-delivery/candidate-31-checks/source-equivalence.json",
+      "/private/tmp/delivery-real-model-final-OWFgS1/real-model-journey-20261112134116-eb4e03d5bd/implementation-publication-observed.json",
+      ".omx/evidence/repository-delivery/candidate-31-checks/stale-command-repair/summary.md",
+      ".omx/evidence/repository-delivery/candidate-31-checks/independent-stale-review.md"
+    ],
+    "verdict": "proven-for-C31",
+    "disposition": "retained in portable TypeScript engine and CLI",
+    "criterionStatus": [
+      {
+        "id": "VAL-LOCAL-GRANTS",
+        "status": "proven-for-C31"
+      },
+      {
+        "id": "VAL-LOCAL-GIT",
+        "status": "proven-for-C31"
+      },
+      {
+        "id": "VAL-LOCAL-PUBLISH-PR",
+        "status": "proven-for-C31"
+      }
+    ],
+    "acceptanceLimit": "Local developer scope. Named C31 checks and direct receipts are bound to exact source hashes; older direct receipts carry only through the documented unchanged-component mapping. No remote GitHub, App-only, production or Python-retirement claim.",
+    "candidateManifest": ".omx/evidence/repository-delivery/candidate-31.json",
+    "candidateManifestSha256": "f6e2987e7934091f61bf70480cb8591898e58f0c4c35e6fee526314dfbd9c362"
+  },
+  {
+    "source": "VAL-FG-PUBLISH-ISSUE",
+    "activeTargets": [
+      "VAL-LOCAL-GRANTS",
+      "VAL-LOCAL-PUBLISH-ISSUE"
+    ],
+    "v2Evidence": [
+      "docs/paseo-delivery-v2/evidence/repository-experience/final-acceptance.json",
+      ".omx/evidence/repository-delivery/candidate-31-checks/package-tests.log",
+      ".omx/evidence/repository-delivery/candidate-31-checks/checks.json",
+      ".omx/evidence/repository-delivery/candidate-31-checks/source-equivalence.json",
+      ".omx/evidence/repository-delivery/candidate-21-checks/proposal-publication.json"
+    ],
+    "verdict": "proven-for-C31",
+    "disposition": "retained in portable TypeScript engine and CLI",
+    "criterionStatus": [
+      {
+        "id": "VAL-LOCAL-GRANTS",
+        "status": "proven-for-C31"
+      },
+      {
+        "id": "VAL-LOCAL-PUBLISH-ISSUE",
+        "status": "proven-for-C31"
+      }
+    ],
+    "acceptanceLimit": "Local developer scope. Named C31 checks and direct receipts are bound to exact source hashes; older direct receipts carry only through the documented unchanged-component mapping. No remote GitHub, App-only, production or Python-retirement claim.",
+    "candidateManifest": ".omx/evidence/repository-delivery/candidate-31.json",
+    "candidateManifestSha256": "f6e2987e7934091f61bf70480cb8591898e58f0c4c35e6fee526314dfbd9c362"
+  },
+  {
+    "source": "dashboard discovery/privacy",
+    "activeTargets": [
+      "VAL-LOCAL-INDEX"
+    ],
+    "v2Evidence": [
+      "docs/paseo-delivery-v2/evidence/repository-experience/final-acceptance.json",
+      ".omx/evidence/repository-delivery/candidate-26-checks/index-rpc/result.json",
+      ".omx/evidence/repository-delivery/candidate-26-checks/index-rpc/recheck.mjs",
+      ".omx/evidence/repository-delivery/candidate-27-checks/independent-source-review.md",
+      ".omx/evidence/repository-delivery/candidate-31-checks/source-equivalence.json"
+    ],
+    "verdict": "proven-for-C31",
+    "disposition": "adapted to native plugin transport and source-derived repository view",
+    "criterionStatus": [
+      {
+        "id": "VAL-LOCAL-INDEX",
+        "status": "proven-for-C31"
+      }
+    ],
+    "acceptanceLimit": "Local developer scope. Named C31 checks and direct receipts are bound to exact source hashes; older direct receipts carry only through the documented unchanged-component mapping. No remote GitHub, App-only, production or Python-retirement claim.",
+    "candidateManifest": ".omx/evidence/repository-delivery/candidate-31.json",
+    "candidateManifestSha256": "f6e2987e7934091f61bf70480cb8591898e58f0c4c35e6fee526314dfbd9c362"
+  },
+  {
+    "source": "dashboard refresh/rebuild/history",
+    "activeTargets": [
+      "VAL-LOCAL-INDEX",
+      "VAL-LOCAL-UI-RECOVERY"
+    ],
+    "v2Evidence": [
+      "docs/paseo-delivery-v2/evidence/repository-experience/final-acceptance.json",
+      ".omx/evidence/repository-delivery/candidate-26-checks/index-rpc/result.json",
+      ".omx/evidence/repository-delivery/candidate-26-checks/index-rpc/recheck.mjs",
+      ".omx/evidence/repository-delivery/candidate-27-checks/independent-source-review.md",
+      ".omx/evidence/repository-delivery/candidate-31-checks/source-equivalence.json",
+      ".omx/evidence/repository-delivery/candidate-21-final-review/native-validation.md",
+      ".omx/evidence/repository-delivery/candidate-31-checks/checks.json"
+    ],
+    "verdict": "proven-for-C31",
+    "disposition": "adapted to native plugin transport and source-derived repository view",
+    "criterionStatus": [
+      {
+        "id": "VAL-LOCAL-INDEX",
+        "status": "proven-for-C31"
+      },
+      {
+        "id": "VAL-LOCAL-UI-RECOVERY",
+        "status": "proven-for-C31"
+      }
+    ],
+    "acceptanceLimit": "Local developer scope. Named C31 checks and direct receipts are bound to exact source hashes; older direct receipts carry only through the documented unchanged-component mapping. No remote GitHub, App-only, production or Python-retirement claim.",
+    "candidateManifest": ".omx/evidence/repository-delivery/candidate-31.json",
+    "candidateManifestSha256": "f6e2987e7934091f61bf70480cb8591898e58f0c4c35e6fee526314dfbd9c362"
+  },
+  {
+    "source": "dashboard UI/access",
+    "activeTargets": [
+      "VAL-LOCAL-UI",
+      "VAL-LOCAL-NATIVE"
+    ],
+    "v2Evidence": [
+      "docs/paseo-delivery-v2/evidence/repository-experience/final-acceptance.json",
+      ".omx/evidence/repository-delivery/candidate-31-checks/package-tests.log",
+      ".omx/evidence/repository-delivery/candidate-26-checks/native-migration/result.json",
+      ".omx/evidence/repository-delivery/candidate-21-final-review/native-validation.md",
+      ".omx/evidence/repository-delivery/candidate-31-checks/checks.json",
+      ".omx/evidence/repository-delivery/candidate-31-checks/source-equivalence.json",
+      "output/playwright/candidate-31-retained-pi-block-desktop.png",
+      "output/playwright/candidate-30-handled-blocked-compact.png",
+      "output/playwright/candidate-30-related-worktree-slash.png",
+      "output/playwright/candidate-30-related-clone-desktop.png"
+    ],
+    "verdict": "proven-for-C31",
+    "disposition": "adapted to native plugin transport and source-derived repository view",
+    "criterionStatus": [
+      {
+        "id": "VAL-LOCAL-UI",
+        "status": "proven-for-C31"
+      },
+      {
+        "id": "VAL-LOCAL-NATIVE",
+        "status": "proven-for-C31"
+      }
+    ],
+    "acceptanceLimit": "Local developer scope. Named C31 checks and direct receipts are bound to exact source hashes; older direct receipts carry only through the documented unchanged-component mapping. No remote GitHub, App-only, production or Python-retirement claim.",
+    "candidateManifest": ".omx/evidence/repository-delivery/candidate-31.json",
+    "candidateManifestSha256": "f6e2987e7934091f61bf70480cb8591898e58f0c4c35e6fee526314dfbd9c362"
+  },
+  {
+    "source": "dashboard action boundary",
+    "activeTargets": [
+      "VAL-LOCAL-CONTROLS"
+    ],
+    "v2Evidence": [
+      "docs/paseo-delivery-v2/evidence/repository-experience/final-acceptance.json",
+      ".omx/evidence/repository-delivery/candidate-31-checks/package-tests.log",
+      ".omx/evidence/repository-delivery/candidate-26-checks/native-migration/result.json",
+      ".omx/evidence/repository-delivery/candidate-31-checks/checks.json",
+      ".omx/evidence/repository-delivery/candidate-31-checks/source-equivalence.json",
+      ".omx/evidence/repository-delivery/candidate-31-checks/stale-command-repair/summary.md",
+      ".omx/evidence/repository-delivery/candidate-31-checks/independent-stale-review.md"
+    ],
+    "verdict": "proven-for-C31",
+    "disposition": "adapted to native plugin transport and source-derived repository view",
+    "criterionStatus": [
+      {
+        "id": "VAL-LOCAL-CONTROLS",
+        "status": "proven-for-C31"
+      }
+    ],
+    "acceptanceLimit": "Local developer scope. Named C31 checks and direct receipts are bound to exact source hashes; older direct receipts carry only through the documented unchanged-component mapping. No remote GitHub, App-only, production or Python-retirement claim.",
+    "candidateManifest": ".omx/evidence/repository-delivery/candidate-31.json",
+    "candidateManifestSha256": "f6e2987e7934091f61bf70480cb8591898e58f0c4c35e6fee526314dfbd9c362"
+  },
+  {
+    "source": "source-derived persistence",
+    "activeTargets": [
+      "VAL-LOCAL-STATE",
+      "VAL-LOCAL-EXPORT"
+    ],
+    "v2Evidence": [
+      "docs/paseo-delivery-v2/evidence/repository-experience/final-acceptance.json",
+      ".omx/evidence/repository-delivery/candidate-31-checks/package-tests.log",
+      ".omx/evidence/repository-delivery/candidate-31-checks/checks.json",
+      ".omx/evidence/repository-delivery/candidate-31-checks/source-equivalence.json",
+      ".omx/evidence/repository-delivery/candidate-21-checks/offline-export.json"
+    ],
+    "verdict": "proven-for-C31",
+    "disposition": "retained in portable TypeScript engine and CLI",
+    "criterionStatus": [
+      {
+        "id": "VAL-LOCAL-STATE",
+        "status": "proven-for-C31"
+      },
+      {
+        "id": "VAL-LOCAL-EXPORT",
+        "status": "proven-for-C31"
+      }
+    ],
+    "acceptanceLimit": "Local developer scope. Named C31 checks and direct receipts are bound to exact source hashes; older direct receipts carry only through the documented unchanged-component mapping. No remote GitHub, App-only, production or Python-retirement claim.",
+    "candidateManifest": ".omx/evidence/repository-delivery/candidate-31.json",
+    "candidateManifestSha256": "f6e2987e7934091f61bf70480cb8591898e58f0c4c35e6fee526314dfbd9c362"
+  }
+]

@@ -14,7 +14,7 @@ license: MIT
 
 The modes are mutually exclusive. If the invocation supplies conflicting mode flags or uses `--notify` outside `--plan`, report the usage error and stop.
 
-When invoked by the controlled [GitHub delivery workflow](../../workflows/github-delivery/README.md), do not hand off or publish. Run the ordinary `--rank` evidence process and return its schema-versioned `rank` manifest with either one numeric `winner` plus the shortlist, or `no_candidate: true`. Use the workflow's pinned skill source and delivery/repository identity. The wrapper owns the durable active claim before selection; this skill remains read-only.
+When invoked by the controlled [repository-scoped Delivery workflow](../../docs/paseo-delivery-v2/repository-experience.md), do not hand off or publish. Run the ordinary `--rank` evidence process and return its schema-versioned `rank` manifest with either one numeric `winner` plus the shortlist, or `no_candidate: true`. Use the workflow's pinned skill source and delivery/repository identity. The wrapper owns the durable active claim before selection; this skill remains read-only.
 
 ## Gather the candidate set
 

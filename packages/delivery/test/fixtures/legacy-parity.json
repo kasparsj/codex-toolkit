@@ -1,0 +1,2618 @@
+{
+  "sourceSha256": "bd4e88feb897fd7a8e09bbc4dd8b4acae516f28252e9f30060f4a0cb208bb56d",
+  "cases": [
+    {
+      "function": "canonical_json",
+      "input": null,
+      "output": "null"
+    },
+    {
+      "function": "canonical_json",
+      "input": true,
+      "output": "true"
+    },
+    {
+      "function": "canonical_json",
+      "input": false,
+      "output": "false"
+    },
+    {
+      "function": "canonical_json",
+      "input": 0,
+      "output": "0"
+    },
+    {
+      "function": "canonical_json",
+      "input": 42,
+      "output": "42"
+    },
+    {
+      "function": "canonical_json",
+      "input": [],
+      "output": "[]"
+    },
+    {
+      "function": "canonical_json",
+      "input": {},
+      "output": "{}"
+    },
+    {
+      "function": "canonical_json",
+      "input": "R\u012bga",
+      "output": "\"R\\u012bga\""
+    },
+    {
+      "function": "canonical_json",
+      "input": "a\n\"\\",
+      "output": "\"a\\n\\\"\\\\\""
+    },
+    {
+      "function": "canonical_json",
+      "input": {
+        "z": "a",
+        "b": 1,
+        "a": {
+          "z": 2,
+          "a": 1
+        }
+      },
+      "output": "{\"a\":{\"a\":1,\"z\":2},\"b\":1,\"z\":\"a\"}"
+    },
+    {
+      "function": "canonical_json",
+      "input": {
+        "unicode": "\ud83d\ude00\u00e9\u2028"
+      },
+      "output": "{\"unicode\":\"\\ud83d\\ude00\\u00e9\\u2028\"}"
+    },
+    {
+      "function": "canonical_json",
+      "input": [
+        1,
+        "x",
+        {
+          "b": false,
+          "a": null
+        }
+      ],
+      "output": "[1,\"x\",{\"a\":null,\"b\":false}]"
+    },
+    {
+      "function": "repo_identity",
+      "input": "acme/widget",
+      "output": "github.com/acme/widget"
+    },
+    {
+      "function": "repo_identity",
+      "input": "GitHub.COM/Acme/Widget",
+      "output": "github.com/acme/widget"
+    },
+    {
+      "function": "repo_identity",
+      "input": "github.test/acme/widget",
+      "output": "github.test/acme/widget"
+    },
+    {
+      "function": "repo_identity",
+      "input": "foo",
+      "error": "repo must be [host/]owner/name"
+    },
+    {
+      "function": "repo_identity",
+      "input": "../a",
+      "output": "github.com/../a"
+    },
+    {
+      "function": "repo_identity",
+      "input": "a/b/c/d",
+      "error": "repo must be [host/]owner/name"
+    },
+    {
+      "function": "repo_identity",
+      "input": "a/b;bad",
+      "error": "repo must be [host/]owner/name"
+    },
+    {
+      "function": "repo_identity",
+      "input": "a/b",
+      "output": "github.com/a/b"
+    },
+    {
+      "function": "gate_route",
+      "input": {
+        "plan_gate": false,
+        "implementation_gate": false,
+        "plan_approved": false,
+        "implementation_approved": false
+      },
+      "output": "publication_pending"
+    },
+    {
+      "function": "gate_route",
+      "input": {
+        "plan_gate": false,
+        "implementation_gate": false,
+        "plan_approved": false,
+        "implementation_approved": true
+      },
+      "output": "publication_pending"
+    },
+    {
+      "function": "gate_route",
+      "input": {
+        "plan_gate": false,
+        "implementation_gate": false,
+        "plan_approved": true,
+        "implementation_approved": false
+      },
+      "output": "publication_pending"
+    },
+    {
+      "function": "gate_route",
+      "input": {
+        "plan_gate": false,
+        "implementation_gate": false,
+        "plan_approved": true,
+        "implementation_approved": true
+      },
+      "output": "publication_pending"
+    },
+    {
+      "function": "gate_route",
+      "input": {
+        "plan_gate": false,
+        "implementation_gate": true,
+        "plan_approved": false,
+        "implementation_approved": false
+      },
+      "output": "implementation_review"
+    },
+    {
+      "function": "gate_route",
+      "input": {
+        "plan_gate": false,
+        "implementation_gate": true,
+        "plan_approved": false,
+        "implementation_approved": true
+      },
+      "output": "publication_pending"
+    },
+    {
+      "function": "gate_route",
+      "input": {
+        "plan_gate": false,
+        "implementation_gate": true,
+        "plan_approved": true,
+        "implementation_approved": false
+      },
+      "output": "implementation_review"
+    },
+    {
+      "function": "gate_route",
+      "input": {
+        "plan_gate": false,
+        "implementation_gate": true,
+        "plan_approved": true,
+        "implementation_approved": true
+      },
+      "output": "publication_pending"
+    },
+    {
+      "function": "gate_route",
+      "input": {
+        "plan_gate": true,
+        "implementation_gate": false,
+        "plan_approved": false,
+        "implementation_approved": false
+      },
+      "output": "plan_review"
+    },
+    {
+      "function": "gate_route",
+      "input": {
+        "plan_gate": true,
+        "implementation_gate": false,
+        "plan_approved": false,
+        "implementation_approved": true
+      },
+      "output": "plan_review"
+    },
+    {
+      "function": "gate_route",
+      "input": {
+        "plan_gate": true,
+        "implementation_gate": false,
+        "plan_approved": true,
+        "implementation_approved": false
+      },
+      "output": "publication_pending"
+    },
+    {
+      "function": "gate_route",
+      "input": {
+        "plan_gate": true,
+        "implementation_gate": false,
+        "plan_approved": true,
+        "implementation_approved": true
+      },
+      "output": "publication_pending"
+    },
+    {
+      "function": "gate_route",
+      "input": {
+        "plan_gate": true,
+        "implementation_gate": true,
+        "plan_approved": false,
+        "implementation_approved": false
+      },
+      "output": "plan_review"
+    },
+    {
+      "function": "gate_route",
+      "input": {
+        "plan_gate": true,
+        "implementation_gate": true,
+        "plan_approved": false,
+        "implementation_approved": true
+      },
+      "output": "plan_review"
+    },
+    {
+      "function": "gate_route",
+      "input": {
+        "plan_gate": true,
+        "implementation_gate": true,
+        "plan_approved": true,
+        "implementation_approved": false
+      },
+      "output": "implementation_review"
+    },
+    {
+      "function": "gate_route",
+      "input": {
+        "plan_gate": true,
+        "implementation_gate": true,
+        "plan_approved": true,
+        "implementation_approved": true
+      },
+      "output": "publication_pending"
+    },
+    {
+      "function": "review_context",
+      "input": {
+        "stage": "plan",
+        "generation": 1,
+        "issue": 42,
+        "material_hashes": {
+          "docs/plan.md": "1111111111111111111111111111111111111111111111111111111111111111"
+        },
+        "baseline_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "base_repo": "acme/widget",
+        "base_ref": "main",
+        "base_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "final_repo": "acme/widget",
+        "final_ref": "main",
+        "policy_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "output": "0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad"
+    },
+    {
+      "function": "review_context",
+      "input": {
+        "stage": "plan",
+        "generation": 2,
+        "issue": 42,
+        "material_hashes": {
+          "docs/plan.md": "1111111111111111111111111111111111111111111111111111111111111111"
+        },
+        "baseline_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "base_repo": "acme/widget",
+        "base_ref": "main",
+        "base_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "final_repo": "acme/widget",
+        "final_ref": "main",
+        "policy_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "output": "83e436d63b2f9db837dda057e42e51fd4e6f2d550eb9bbd645389feea303839d"
+    },
+    {
+      "function": "review_context",
+      "input": {
+        "stage": "implementation",
+        "generation": 1,
+        "issue": 42,
+        "material_hashes": {
+          "docs/plan.md": "1111111111111111111111111111111111111111111111111111111111111111"
+        },
+        "baseline_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "base_repo": "acme/widget",
+        "base_ref": "main",
+        "base_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "final_repo": "acme/widget",
+        "final_ref": "main",
+        "policy_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "output": "85ab40582eda5a428b335db25ce438930f85802923c5a1fcb8ce6d7eaccb51d6"
+    },
+    {
+      "function": "review_context",
+      "input": {
+        "stage": "plan",
+        "generation": 1,
+        "issue": 42,
+        "material_hashes": {
+          "docs/plan.md": "1111111111111111111111111111111111111111111111111111111111111111"
+        },
+        "baseline_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "base_repo": "acme/widget",
+        "base_ref": "main",
+        "base_sha": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "final_repo": "acme/widget",
+        "final_ref": "main",
+        "policy_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "output": "bc58f823705be2514f3837b50010c62ef4b48d8dd1a9d415fd90c8fa5cb23f89"
+    },
+    {
+      "function": "review_context",
+      "input": {
+        "stage": "plan",
+        "generation": 1,
+        "issue": 42,
+        "material_hashes": {
+          "docs/plan.md": "1111111111111111111111111111111111111111111111111111111111111111"
+        },
+        "baseline_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "base_repo": "acme/widget",
+        "base_ref": "stack/parent",
+        "base_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "final_repo": "acme/widget",
+        "final_ref": "main",
+        "policy_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "output": "2388e92e05bab24f0c9b73f84e041d86e39ab266b3e7b2e420d0bca932705fe0"
+    },
+    {
+      "function": "review_context",
+      "input": {
+        "stage": "plan",
+        "generation": 1,
+        "issue": 42,
+        "material_hashes": {
+          "docs/plan.md": "1111111111111111111111111111111111111111111111111111111111111111"
+        },
+        "baseline_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "base_repo": "acme/widget",
+        "base_ref": "main",
+        "base_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "final_repo": "acme/widget",
+        "final_ref": "release",
+        "policy_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "output": "1955f48ae66c6c18fcab57425d48486e2e5478d6266fb41772b0cc9d7dbe7829"
+    },
+    {
+      "function": "review_context",
+      "input": {
+        "stage": "plan",
+        "generation": 1,
+        "issue": 42,
+        "material_hashes": {
+          "docs/\u00e9.md": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        },
+        "baseline_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "base_repo": "acme/widget",
+        "base_ref": "main",
+        "base_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "final_repo": "acme/widget",
+        "final_ref": "main",
+        "policy_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "output": "504e6723300a21ddb00dd0c95ce2d1ef955afbcb2e7614e6e942b6408b03ae21"
+    },
+    {
+      "function": "review_context",
+      "input": {
+        "stage": "plan",
+        "generation": 1,
+        "issue": 7,
+        "material_hashes": {
+          "docs/plan.md": "1111111111111111111111111111111111111111111111111111111111111111"
+        },
+        "baseline_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "base_repo": "acme/widget",
+        "base_ref": "main",
+        "base_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "final_repo": "acme/widget",
+        "final_ref": "main",
+        "policy_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "output": "1ac43bb6bc688aede66da4cce6457707a90f9e0e8b81f3c5ec50b09e6ca2c6cc"
+    },
+    {
+      "function": "review_context",
+      "input": {
+        "stage": "plan",
+        "generation": 1,
+        "issue": 42,
+        "material_hashes": {
+          "docs/plan.md": "1111111111111111111111111111111111111111111111111111111111111111"
+        },
+        "baseline_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "base_repo": "acme/widget",
+        "base_ref": "main",
+        "base_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "final_repo": "acme/widget",
+        "final_ref": "main",
+        "policy_digest": "2222222222222222222222222222222222222222222222222222222222222222"
+      },
+      "output": "e5313a038fcf091a76e93f04ced1b6e1e567d8871c60042b0b5374aaf9a92aeb"
+    },
+    {
+      "function": "review_context",
+      "input": {
+        "stage": "plan",
+        "generation": 1,
+        "issue": 42,
+        "material_hashes": {
+          "docs/plan.md": "1111111111111111111111111111111111111111111111111111111111111111"
+        },
+        "baseline_sha": "3333333333333333333333333333333333333333",
+        "base_repo": "acme/widget",
+        "base_ref": "main",
+        "base_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "final_repo": "acme/widget",
+        "final_ref": "main",
+        "policy_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "output": "ec4e22fa8946228bc628c8013660f9c1767b8f630a23f7e3e17d35581750b4c0"
+    },
+    {
+      "function": "evaluate_reviews",
+      "input": {
+        "stage": "plan",
+        "generation": 1,
+        "context_digest": "0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad",
+        "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+        "authorized_ids": [
+          101,
+          102
+        ],
+        "publisher_id": 900,
+        "minimum": 1,
+        "reviews": [],
+        "require_human": false
+      },
+      "output": {
+        "approved": false,
+        "approvers": [],
+        "rejectors": [],
+        "minimum": 1
+      }
+    },
+    {
+      "function": "evaluate_reviews",
+      "input": {
+        "stage": "plan",
+        "generation": 1,
+        "context_digest": "0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad",
+        "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+        "authorized_ids": [
+          101,
+          102
+        ],
+        "publisher_id": 900,
+        "minimum": 1,
+        "reviews": [],
+        "require_human": true
+      },
+      "output": {
+        "approved": false,
+        "approvers": [],
+        "rejectors": [],
+        "minimum": 1,
+        "review_ids": {}
+      }
+    },
+    {
+      "function": "evaluate_reviews",
+      "input": {
+        "stage": "plan",
+        "generation": 1,
+        "context_digest": "0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad",
+        "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+        "authorized_ids": [
+          101,
+          102
+        ],
+        "publisher_id": 900,
+        "minimum": 1,
+        "reviews": [
+          {
+            "id": 1,
+            "user": {
+              "id": 101,
+              "type": "User"
+            },
+            "state": "COMMENTED",
+            "dismissed": false,
+            "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+            "body": "delivery-review plan 1 0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad approve",
+            "submitted_at": "2026-11-11T12:00:00Z"
+          }
+        ],
+        "require_human": false
+      },
+      "output": {
+        "approved": true,
+        "approvers": [
+          101
+        ],
+        "rejectors": [],
+        "minimum": 1
+      }
+    },
+    {
+      "function": "evaluate_reviews",
+      "input": {
+        "stage": "plan",
+        "generation": 1,
+        "context_digest": "0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad",
+        "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+        "authorized_ids": [
+          101,
+          102
+        ],
+        "publisher_id": 900,
+        "minimum": 1,
+        "reviews": [
+          {
+            "id": 1,
+            "user": {
+              "id": 101,
+              "type": "User"
+            },
+            "state": "COMMENTED",
+            "dismissed": false,
+            "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+            "body": "delivery-review plan 1 0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad approve",
+            "submitted_at": "2026-11-11T12:00:00Z"
+          }
+        ],
+        "require_human": true
+      },
+      "output": {
+        "approved": true,
+        "approvers": [
+          101
+        ],
+        "rejectors": [],
+        "minimum": 1,
+        "review_ids": {
+          "101": 1
+        }
+      }
+    },
+    {
+      "function": "evaluate_reviews",
+      "input": {
+        "stage": "plan",
+        "generation": 1,
+        "context_digest": "0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad",
+        "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+        "authorized_ids": [
+          101,
+          102
+        ],
+        "publisher_id": 900,
+        "minimum": 1,
+        "reviews": [
+          {
+            "id": 1,
+            "user": {
+              "id": 102,
+              "type": "User"
+            },
+            "state": "COMMENTED",
+            "dismissed": false,
+            "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+            "body": "delivery-review plan 1 0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad approve",
+            "submitted_at": "2026-11-11T12:00:00Z"
+          }
+        ],
+        "require_human": false
+      },
+      "output": {
+        "approved": true,
+        "approvers": [
+          102
+        ],
+        "rejectors": [],
+        "minimum": 1
+      }
+    },
+    {
+      "function": "evaluate_reviews",
+      "input": {
+        "stage": "plan",
+        "generation": 1,
+        "context_digest": "0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad",
+        "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+        "authorized_ids": [
+          101,
+          102
+        ],
+        "publisher_id": 900,
+        "minimum": 1,
+        "reviews": [
+          {
+            "id": 1,
+            "user": {
+              "id": 102,
+              "type": "User"
+            },
+            "state": "COMMENTED",
+            "dismissed": false,
+            "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+            "body": "delivery-review plan 1 0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad approve",
+            "submitted_at": "2026-11-11T12:00:00Z"
+          }
+        ],
+        "require_human": true
+      },
+      "output": {
+        "approved": true,
+        "approvers": [
+          102
+        ],
+        "rejectors": [],
+        "minimum": 1,
+        "review_ids": {
+          "102": 1
+        }
+      }
+    },
+    {
+      "function": "evaluate_reviews",
+      "input": {
+        "stage": "plan",
+        "generation": 1,
+        "context_digest": "0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad",
+        "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+        "authorized_ids": [
+          101,
+          102
+        ],
+        "publisher_id": 900,
+        "minimum": 1,
+        "reviews": [
+          {
+            "id": 1,
+            "user": {
+              "id": 900,
+              "type": "User"
+            },
+            "state": "COMMENTED",
+            "dismissed": false,
+            "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+            "body": "delivery-review plan 1 0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad approve",
+            "submitted_at": "2026-11-11T12:00:00Z"
+          }
+        ],
+        "require_human": false
+      },
+      "output": {
+        "approved": false,
+        "approvers": [],
+        "rejectors": [],
+        "minimum": 1
+      }
+    },
+    {
+      "function": "evaluate_reviews",
+      "input": {
+        "stage": "plan",
+        "generation": 1,
+        "context_digest": "0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad",
+        "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+        "authorized_ids": [
+          101,
+          102
+        ],
+        "publisher_id": 900,
+        "minimum": 1,
+        "reviews": [
+          {
+            "id": 1,
+            "user": {
+              "id": 900,
+              "type": "User"
+            },
+            "state": "COMMENTED",
+            "dismissed": false,
+            "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+            "body": "delivery-review plan 1 0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad approve",
+            "submitted_at": "2026-11-11T12:00:00Z"
+          }
+        ],
+        "require_human": true
+      },
+      "output": {
+        "approved": false,
+        "approvers": [],
+        "rejectors": [],
+        "minimum": 1,
+        "review_ids": {}
+      }
+    },
+    {
+      "function": "evaluate_reviews",
+      "input": {
+        "stage": "plan",
+        "generation": 1,
+        "context_digest": "0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad",
+        "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+        "authorized_ids": [
+          101,
+          102
+        ],
+        "publisher_id": 900,
+        "minimum": 1,
+        "reviews": [
+          {
+            "id": 1,
+            "user": {
+              "id": 777,
+              "type": "User"
+            },
+            "state": "COMMENTED",
+            "dismissed": false,
+            "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+            "body": "delivery-review plan 1 0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad approve",
+            "submitted_at": "2026-11-11T12:00:00Z"
+          }
+        ],
+        "require_human": false
+      },
+      "output": {
+        "approved": false,
+        "approvers": [],
+        "rejectors": [],
+        "minimum": 1
+      }
+    },
+    {
+      "function": "evaluate_reviews",
+      "input": {
+        "stage": "plan",
+        "generation": 1,
+        "context_digest": "0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad",
+        "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+        "authorized_ids": [
+          101,
+          102
+        ],
+        "publisher_id": 900,
+        "minimum": 1,
+        "reviews": [
+          {
+            "id": 1,
+            "user": {
+              "id": 777,
+              "type": "User"
+            },
+            "state": "COMMENTED",
+            "dismissed": false,
+            "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+            "body": "delivery-review plan 1 0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad approve",
+            "submitted_at": "2026-11-11T12:00:00Z"
+          }
+        ],
+        "require_human": true
+      },
+      "output": {
+        "approved": false,
+        "approvers": [],
+        "rejectors": [],
+        "minimum": 1,
+        "review_ids": {}
+      }
+    },
+    {
+      "function": "evaluate_reviews",
+      "input": {
+        "stage": "plan",
+        "generation": 1,
+        "context_digest": "0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad",
+        "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+        "authorized_ids": [
+          101,
+          102
+        ],
+        "publisher_id": 900,
+        "minimum": 1,
+        "reviews": [
+          {
+            "id": 1,
+            "user": {
+              "id": 101,
+              "type": "User"
+            },
+            "state": "COMMENTED",
+            "dismissed": true,
+            "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+            "body": "delivery-review plan 1 0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad approve",
+            "submitted_at": "2026-11-11T12:00:00Z"
+          }
+        ],
+        "require_human": false
+      },
+      "output": {
+        "approved": false,
+        "approvers": [],
+        "rejectors": [],
+        "minimum": 1
+      }
+    },
+    {
+      "function": "evaluate_reviews",
+      "input": {
+        "stage": "plan",
+        "generation": 1,
+        "context_digest": "0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad",
+        "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+        "authorized_ids": [
+          101,
+          102
+        ],
+        "publisher_id": 900,
+        "minimum": 1,
+        "reviews": [
+          {
+            "id": 1,
+            "user": {
+              "id": 101,
+              "type": "User"
+            },
+            "state": "COMMENTED",
+            "dismissed": true,
+            "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+            "body": "delivery-review plan 1 0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad approve",
+            "submitted_at": "2026-11-11T12:00:00Z"
+          }
+        ],
+        "require_human": true
+      },
+      "output": {
+        "approved": false,
+        "approvers": [],
+        "rejectors": [],
+        "minimum": 1,
+        "review_ids": {}
+      }
+    },
+    {
+      "function": "evaluate_reviews",
+      "input": {
+        "stage": "plan",
+        "generation": 1,
+        "context_digest": "0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad",
+        "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+        "authorized_ids": [
+          101,
+          102
+        ],
+        "publisher_id": 900,
+        "minimum": 1,
+        "reviews": [
+          {
+            "id": 1,
+            "user": {
+              "id": 101,
+              "type": "User"
+            },
+            "state": "APPROVED",
+            "dismissed": false,
+            "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+            "body": "delivery-review plan 1 0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad approve",
+            "submitted_at": "2026-11-11T12:00:00Z"
+          }
+        ],
+        "require_human": false
+      },
+      "output": {
+        "approved": false,
+        "approvers": [],
+        "rejectors": [],
+        "minimum": 1
+      }
+    },
+    {
+      "function": "evaluate_reviews",
+      "input": {
+        "stage": "plan",
+        "generation": 1,
+        "context_digest": "0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad",
+        "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+        "authorized_ids": [
+          101,
+          102
+        ],
+        "publisher_id": 900,
+        "minimum": 1,
+        "reviews": [
+          {
+            "id": 1,
+            "user": {
+              "id": 101,
+              "type": "User"
+            },
+            "state": "APPROVED",
+            "dismissed": false,
+            "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+            "body": "delivery-review plan 1 0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad approve",
+            "submitted_at": "2026-11-11T12:00:00Z"
+          }
+        ],
+        "require_human": true
+      },
+      "output": {
+        "approved": false,
+        "approvers": [],
+        "rejectors": [],
+        "minimum": 1,
+        "review_ids": {}
+      }
+    },
+    {
+      "function": "evaluate_reviews",
+      "input": {
+        "stage": "plan",
+        "generation": 1,
+        "context_digest": "0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad",
+        "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+        "authorized_ids": [
+          101,
+          102
+        ],
+        "publisher_id": 900,
+        "minimum": 1,
+        "reviews": [
+          {
+            "id": 1,
+            "user": {
+              "id": 101,
+              "type": "User"
+            },
+            "state": "CHANGES_REQUESTED",
+            "dismissed": false,
+            "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+            "body": "delivery-review plan 1 0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad approve",
+            "submitted_at": "2026-11-11T12:00:00Z"
+          }
+        ],
+        "require_human": false
+      },
+      "output": {
+        "approved": false,
+        "approvers": [],
+        "rejectors": [],
+        "minimum": 1
+      }
+    },
+    {
+      "function": "evaluate_reviews",
+      "input": {
+        "stage": "plan",
+        "generation": 1,
+        "context_digest": "0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad",
+        "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+        "authorized_ids": [
+          101,
+          102
+        ],
+        "publisher_id": 900,
+        "minimum": 1,
+        "reviews": [
+          {
+            "id": 1,
+            "user": {
+              "id": 101,
+              "type": "User"
+            },
+            "state": "CHANGES_REQUESTED",
+            "dismissed": false,
+            "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+            "body": "delivery-review plan 1 0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad approve",
+            "submitted_at": "2026-11-11T12:00:00Z"
+          }
+        ],
+        "require_human": true
+      },
+      "output": {
+        "approved": false,
+        "approvers": [],
+        "rejectors": [],
+        "minimum": 1,
+        "review_ids": {}
+      }
+    },
+    {
+      "function": "evaluate_reviews",
+      "input": {
+        "stage": "plan",
+        "generation": 1,
+        "context_digest": "0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad",
+        "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+        "authorized_ids": [
+          101,
+          102
+        ],
+        "publisher_id": 900,
+        "minimum": 1,
+        "reviews": [
+          {
+            "id": 1,
+            "user": {
+              "id": 101,
+              "type": "User"
+            },
+            "state": "COMMENTED",
+            "dismissed": false,
+            "commit_id": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "body": "delivery-review plan 1 0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad approve",
+            "submitted_at": "2026-11-11T12:00:00Z"
+          }
+        ],
+        "require_human": false
+      },
+      "output": {
+        "approved": false,
+        "approvers": [],
+        "rejectors": [],
+        "minimum": 1
+      }
+    },
+    {
+      "function": "evaluate_reviews",
+      "input": {
+        "stage": "plan",
+        "generation": 1,
+        "context_digest": "0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad",
+        "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+        "authorized_ids": [
+          101,
+          102
+        ],
+        "publisher_id": 900,
+        "minimum": 1,
+        "reviews": [
+          {
+            "id": 1,
+            "user": {
+              "id": 101,
+              "type": "User"
+            },
+            "state": "COMMENTED",
+            "dismissed": false,
+            "commit_id": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "body": "delivery-review plan 1 0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad approve",
+            "submitted_at": "2026-11-11T12:00:00Z"
+          }
+        ],
+        "require_human": true
+      },
+      "output": {
+        "approved": false,
+        "approvers": [],
+        "rejectors": [],
+        "minimum": 1,
+        "review_ids": {}
+      }
+    },
+    {
+      "function": "evaluate_reviews",
+      "input": {
+        "stage": "plan",
+        "generation": 1,
+        "context_digest": "0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad",
+        "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+        "authorized_ids": [
+          101,
+          102
+        ],
+        "publisher_id": 900,
+        "minimum": 1,
+        "reviews": [
+          {
+            "id": 1,
+            "user": {
+              "id": 101,
+              "type": "User"
+            },
+            "state": "COMMENTED",
+            "dismissed": false,
+            "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+            "body": "approve",
+            "submitted_at": "2026-11-11T12:00:00Z"
+          }
+        ],
+        "require_human": false
+      },
+      "output": {
+        "approved": false,
+        "approvers": [],
+        "rejectors": [],
+        "minimum": 1
+      }
+    },
+    {
+      "function": "evaluate_reviews",
+      "input": {
+        "stage": "plan",
+        "generation": 1,
+        "context_digest": "0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad",
+        "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+        "authorized_ids": [
+          101,
+          102
+        ],
+        "publisher_id": 900,
+        "minimum": 1,
+        "reviews": [
+          {
+            "id": 1,
+            "user": {
+              "id": 101,
+              "type": "User"
+            },
+            "state": "COMMENTED",
+            "dismissed": false,
+            "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+            "body": "approve",
+            "submitted_at": "2026-11-11T12:00:00Z"
+          }
+        ],
+        "require_human": true
+      },
+      "output": {
+        "approved": false,
+        "approvers": [],
+        "rejectors": [],
+        "minimum": 1,
+        "review_ids": {}
+      }
+    },
+    {
+      "function": "evaluate_reviews",
+      "input": {
+        "stage": "plan",
+        "generation": 1,
+        "context_digest": "0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad",
+        "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+        "authorized_ids": [
+          101,
+          102
+        ],
+        "publisher_id": 900,
+        "minimum": 1,
+        "reviews": [
+          {
+            "id": 1,
+            "user": {
+              "id": 101,
+              "type": "User"
+            },
+            "state": "COMMENTED",
+            "dismissed": false,
+            "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+            "body": "delivery-review plan 2 0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad approve",
+            "submitted_at": "2026-11-11T12:00:00Z"
+          }
+        ],
+        "require_human": false
+      },
+      "output": {
+        "approved": false,
+        "approvers": [],
+        "rejectors": [],
+        "minimum": 1
+      }
+    },
+    {
+      "function": "evaluate_reviews",
+      "input": {
+        "stage": "plan",
+        "generation": 1,
+        "context_digest": "0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad",
+        "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+        "authorized_ids": [
+          101,
+          102
+        ],
+        "publisher_id": 900,
+        "minimum": 1,
+        "reviews": [
+          {
+            "id": 1,
+            "user": {
+              "id": 101,
+              "type": "User"
+            },
+            "state": "COMMENTED",
+            "dismissed": false,
+            "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+            "body": "delivery-review plan 2 0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad approve",
+            "submitted_at": "2026-11-11T12:00:00Z"
+          }
+        ],
+        "require_human": true
+      },
+      "output": {
+        "approved": false,
+        "approvers": [],
+        "rejectors": [],
+        "minimum": 1,
+        "review_ids": {}
+      }
+    },
+    {
+      "function": "evaluate_reviews",
+      "input": {
+        "stage": "plan",
+        "generation": 1,
+        "context_digest": "0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad",
+        "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+        "authorized_ids": [
+          101,
+          102
+        ],
+        "publisher_id": 900,
+        "minimum": 1,
+        "reviews": [
+          {
+            "id": 1,
+            "user": {
+              "id": 101,
+              "type": "User"
+            },
+            "state": "COMMENTED",
+            "dismissed": false,
+            "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+            "body": "delivery-review plan 1 0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad approve",
+            "submitted_at": "2026-11-11T12:00:00Z"
+          },
+          {
+            "id": 2,
+            "user": {
+              "id": 101,
+              "type": "User"
+            },
+            "state": "COMMENTED",
+            "dismissed": false,
+            "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+            "body": "delivery-review plan 1 0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad reject",
+            "submitted_at": "2026-11-11T12:00:00Z"
+          }
+        ],
+        "require_human": false
+      },
+      "output": {
+        "approved": false,
+        "approvers": [],
+        "rejectors": [
+          101
+        ],
+        "minimum": 1
+      }
+    },
+    {
+      "function": "evaluate_reviews",
+      "input": {
+        "stage": "plan",
+        "generation": 1,
+        "context_digest": "0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad",
+        "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+        "authorized_ids": [
+          101,
+          102
+        ],
+        "publisher_id": 900,
+        "minimum": 1,
+        "reviews": [
+          {
+            "id": 1,
+            "user": {
+              "id": 101,
+              "type": "User"
+            },
+            "state": "COMMENTED",
+            "dismissed": false,
+            "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+            "body": "delivery-review plan 1 0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad approve",
+            "submitted_at": "2026-11-11T12:00:00Z"
+          },
+          {
+            "id": 2,
+            "user": {
+              "id": 101,
+              "type": "User"
+            },
+            "state": "COMMENTED",
+            "dismissed": false,
+            "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+            "body": "delivery-review plan 1 0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad reject",
+            "submitted_at": "2026-11-11T12:00:00Z"
+          }
+        ],
+        "require_human": true
+      },
+      "output": {
+        "approved": false,
+        "approvers": [],
+        "rejectors": [
+          101
+        ],
+        "minimum": 1,
+        "review_ids": {
+          "101": 2
+        }
+      }
+    },
+    {
+      "function": "evaluate_reviews",
+      "input": {
+        "stage": "plan",
+        "generation": 1,
+        "context_digest": "0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad",
+        "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+        "authorized_ids": [
+          101,
+          102
+        ],
+        "publisher_id": 900,
+        "minimum": 1,
+        "reviews": [
+          {
+            "id": 2,
+            "user": {
+              "id": 101,
+              "type": "User"
+            },
+            "state": "COMMENTED",
+            "dismissed": false,
+            "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+            "body": "delivery-review plan 1 0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad reject",
+            "submitted_at": "2026-11-11T12:00:00Z"
+          },
+          {
+            "id": 1,
+            "user": {
+              "id": 101,
+              "type": "User"
+            },
+            "state": "COMMENTED",
+            "dismissed": false,
+            "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+            "body": "delivery-review plan 1 0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad approve",
+            "submitted_at": "2026-11-11T12:00:00Z"
+          }
+        ],
+        "require_human": false
+      },
+      "output": {
+        "approved": false,
+        "approvers": [],
+        "rejectors": [
+          101
+        ],
+        "minimum": 1
+      }
+    },
+    {
+      "function": "evaluate_reviews",
+      "input": {
+        "stage": "plan",
+        "generation": 1,
+        "context_digest": "0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad",
+        "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+        "authorized_ids": [
+          101,
+          102
+        ],
+        "publisher_id": 900,
+        "minimum": 1,
+        "reviews": [
+          {
+            "id": 2,
+            "user": {
+              "id": 101,
+              "type": "User"
+            },
+            "state": "COMMENTED",
+            "dismissed": false,
+            "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+            "body": "delivery-review plan 1 0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad reject",
+            "submitted_at": "2026-11-11T12:00:00Z"
+          },
+          {
+            "id": 1,
+            "user": {
+              "id": 101,
+              "type": "User"
+            },
+            "state": "COMMENTED",
+            "dismissed": false,
+            "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+            "body": "delivery-review plan 1 0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad approve",
+            "submitted_at": "2026-11-11T12:00:00Z"
+          }
+        ],
+        "require_human": true
+      },
+      "output": {
+        "approved": false,
+        "approvers": [],
+        "rejectors": [
+          101
+        ],
+        "minimum": 1,
+        "review_ids": {
+          "101": 2
+        }
+      }
+    },
+    {
+      "function": "evaluate_reviews",
+      "input": {
+        "stage": "plan",
+        "generation": 1,
+        "context_digest": "0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad",
+        "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+        "authorized_ids": [
+          101,
+          102
+        ],
+        "publisher_id": 900,
+        "minimum": 1,
+        "reviews": [
+          {
+            "id": 1,
+            "user": {
+              "id": 101,
+              "type": "User"
+            },
+            "state": "COMMENTED",
+            "dismissed": false,
+            "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+            "body": "delivery-review plan 1 0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad reject",
+            "submitted_at": "2026-11-11T12:00:00Z"
+          },
+          {
+            "id": 2,
+            "user": {
+              "id": 101,
+              "type": "User"
+            },
+            "state": "COMMENTED",
+            "dismissed": false,
+            "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+            "body": "delivery-review plan 1 0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad approve",
+            "submitted_at": "2026-11-11T12:00:00Z"
+          }
+        ],
+        "require_human": false
+      },
+      "output": {
+        "approved": true,
+        "approvers": [
+          101
+        ],
+        "rejectors": [],
+        "minimum": 1
+      }
+    },
+    {
+      "function": "evaluate_reviews",
+      "input": {
+        "stage": "plan",
+        "generation": 1,
+        "context_digest": "0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad",
+        "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+        "authorized_ids": [
+          101,
+          102
+        ],
+        "publisher_id": 900,
+        "minimum": 1,
+        "reviews": [
+          {
+            "id": 1,
+            "user": {
+              "id": 101,
+              "type": "User"
+            },
+            "state": "COMMENTED",
+            "dismissed": false,
+            "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+            "body": "delivery-review plan 1 0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad reject",
+            "submitted_at": "2026-11-11T12:00:00Z"
+          },
+          {
+            "id": 2,
+            "user": {
+              "id": 101,
+              "type": "User"
+            },
+            "state": "COMMENTED",
+            "dismissed": false,
+            "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+            "body": "delivery-review plan 1 0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad approve",
+            "submitted_at": "2026-11-11T12:00:00Z"
+          }
+        ],
+        "require_human": true
+      },
+      "output": {
+        "approved": true,
+        "approvers": [
+          101
+        ],
+        "rejectors": [],
+        "minimum": 1,
+        "review_ids": {
+          "101": 2
+        }
+      }
+    },
+    {
+      "function": "evaluate_reviews",
+      "input": {
+        "stage": "plan",
+        "generation": 1,
+        "context_digest": "0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad",
+        "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+        "authorized_ids": [
+          101,
+          102
+        ],
+        "publisher_id": 900,
+        "minimum": 1,
+        "reviews": [
+          {
+            "id": 1,
+            "user": {
+              "id": 101,
+              "type": "User"
+            },
+            "state": "COMMENTED",
+            "dismissed": false,
+            "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+            "body": "delivery-review plan 1 0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad approve",
+            "submitted_at": "2026-11-11T12:00:00Z"
+          },
+          {
+            "id": 2,
+            "user": {
+              "id": 102,
+              "type": "User"
+            },
+            "state": "COMMENTED",
+            "dismissed": false,
+            "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+            "body": "delivery-review plan 1 0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad approve",
+            "submitted_at": "2026-11-11T12:00:00Z"
+          }
+        ],
+        "require_human": false
+      },
+      "output": {
+        "approved": true,
+        "approvers": [
+          101,
+          102
+        ],
+        "rejectors": [],
+        "minimum": 1
+      }
+    },
+    {
+      "function": "evaluate_reviews",
+      "input": {
+        "stage": "plan",
+        "generation": 1,
+        "context_digest": "0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad",
+        "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+        "authorized_ids": [
+          101,
+          102
+        ],
+        "publisher_id": 900,
+        "minimum": 1,
+        "reviews": [
+          {
+            "id": 1,
+            "user": {
+              "id": 101,
+              "type": "User"
+            },
+            "state": "COMMENTED",
+            "dismissed": false,
+            "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+            "body": "delivery-review plan 1 0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad approve",
+            "submitted_at": "2026-11-11T12:00:00Z"
+          },
+          {
+            "id": 2,
+            "user": {
+              "id": 102,
+              "type": "User"
+            },
+            "state": "COMMENTED",
+            "dismissed": false,
+            "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+            "body": "delivery-review plan 1 0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad approve",
+            "submitted_at": "2026-11-11T12:00:00Z"
+          }
+        ],
+        "require_human": true
+      },
+      "output": {
+        "approved": true,
+        "approvers": [
+          101,
+          102
+        ],
+        "rejectors": [],
+        "minimum": 1,
+        "review_ids": {
+          "101": 1,
+          "102": 2
+        }
+      }
+    },
+    {
+      "function": "evaluate_reviews",
+      "input": {
+        "stage": "plan",
+        "generation": 1,
+        "context_digest": "0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad",
+        "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+        "authorized_ids": [
+          101,
+          102
+        ],
+        "publisher_id": 900,
+        "minimum": 1,
+        "reviews": [
+          {
+            "id": 1,
+            "user": {
+              "id": 101,
+              "type": "User"
+            },
+            "state": "COMMENTED",
+            "dismissed": false,
+            "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+            "body": "delivery-review plan 1 0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad approve",
+            "submitted_at": "2026-11-11T12:00:00Z"
+          },
+          {
+            "id": 2,
+            "user": {
+              "id": 102,
+              "type": "User"
+            },
+            "state": "COMMENTED",
+            "dismissed": false,
+            "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+            "body": "delivery-review plan 1 0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad reject",
+            "submitted_at": "2026-11-11T12:00:00Z"
+          }
+        ],
+        "require_human": false
+      },
+      "output": {
+        "approved": false,
+        "approvers": [
+          101
+        ],
+        "rejectors": [
+          102
+        ],
+        "minimum": 1
+      }
+    },
+    {
+      "function": "evaluate_reviews",
+      "input": {
+        "stage": "plan",
+        "generation": 1,
+        "context_digest": "0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad",
+        "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+        "authorized_ids": [
+          101,
+          102
+        ],
+        "publisher_id": 900,
+        "minimum": 1,
+        "reviews": [
+          {
+            "id": 1,
+            "user": {
+              "id": 101,
+              "type": "User"
+            },
+            "state": "COMMENTED",
+            "dismissed": false,
+            "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+            "body": "delivery-review plan 1 0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad approve",
+            "submitted_at": "2026-11-11T12:00:00Z"
+          },
+          {
+            "id": 2,
+            "user": {
+              "id": 102,
+              "type": "User"
+            },
+            "state": "COMMENTED",
+            "dismissed": false,
+            "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+            "body": "delivery-review plan 1 0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad reject",
+            "submitted_at": "2026-11-11T12:00:00Z"
+          }
+        ],
+        "require_human": true
+      },
+      "output": {
+        "approved": false,
+        "approvers": [
+          101
+        ],
+        "rejectors": [
+          102
+        ],
+        "minimum": 1,
+        "review_ids": {
+          "101": 1,
+          "102": 2
+        }
+      }
+    },
+    {
+      "function": "evaluate_reviews",
+      "input": {
+        "stage": "plan",
+        "generation": 1,
+        "context_digest": "0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad",
+        "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+        "authorized_ids": [
+          101,
+          102
+        ],
+        "publisher_id": 900,
+        "minimum": 1,
+        "reviews": [
+          {
+            "id": 1,
+            "user": {
+              "id": 101,
+              "type": "User"
+            },
+            "state": "COMMENTED",
+            "dismissed": false,
+            "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+            "body": "delivery-review plan 1 0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad approve",
+            "submitted_at": null
+          }
+        ],
+        "require_human": false
+      },
+      "output": {
+        "approved": false,
+        "approvers": [],
+        "rejectors": [],
+        "minimum": 1
+      }
+    },
+    {
+      "function": "evaluate_reviews",
+      "input": {
+        "stage": "plan",
+        "generation": 1,
+        "context_digest": "0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad",
+        "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+        "authorized_ids": [
+          101,
+          102
+        ],
+        "publisher_id": 900,
+        "minimum": 1,
+        "reviews": [
+          {
+            "id": 1,
+            "user": {
+              "id": 101,
+              "type": "User"
+            },
+            "state": "COMMENTED",
+            "dismissed": false,
+            "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+            "body": "delivery-review plan 1 0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad approve",
+            "submitted_at": null
+          }
+        ],
+        "require_human": true
+      },
+      "output": {
+        "approved": false,
+        "approvers": [],
+        "rejectors": [],
+        "minimum": 1,
+        "review_ids": {}
+      }
+    },
+    {
+      "function": "evaluate_reviews",
+      "input": {
+        "stage": "plan",
+        "generation": 1,
+        "context_digest": "0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad",
+        "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+        "authorized_ids": [
+          101,
+          102
+        ],
+        "publisher_id": 900,
+        "minimum": 1,
+        "reviews": [
+          {
+            "id": "1",
+            "user": {
+              "id": 101,
+              "type": "User"
+            },
+            "state": "COMMENTED",
+            "dismissed": false,
+            "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+            "body": "delivery-review plan 1 0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad approve",
+            "submitted_at": "2026-11-11T12:00:00Z"
+          }
+        ],
+        "require_human": false
+      },
+      "output": {
+        "approved": false,
+        "approvers": [],
+        "rejectors": [],
+        "minimum": 1
+      }
+    },
+    {
+      "function": "evaluate_reviews",
+      "input": {
+        "stage": "plan",
+        "generation": 1,
+        "context_digest": "0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad",
+        "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+        "authorized_ids": [
+          101,
+          102
+        ],
+        "publisher_id": 900,
+        "minimum": 1,
+        "reviews": [
+          {
+            "id": "1",
+            "user": {
+              "id": 101,
+              "type": "User"
+            },
+            "state": "COMMENTED",
+            "dismissed": false,
+            "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+            "body": "delivery-review plan 1 0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad approve",
+            "submitted_at": "2026-11-11T12:00:00Z"
+          }
+        ],
+        "require_human": true
+      },
+      "output": {
+        "approved": false,
+        "approvers": [],
+        "rejectors": [],
+        "minimum": 1,
+        "review_ids": {}
+      }
+    },
+    {
+      "function": "evaluate_reviews",
+      "input": {
+        "stage": "plan",
+        "generation": 1,
+        "context_digest": "0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad",
+        "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+        "authorized_ids": [
+          101,
+          102
+        ],
+        "publisher_id": 900,
+        "minimum": 1,
+        "reviews": [
+          {
+            "id": 1,
+            "user": {
+              "id": 101,
+              "type": "User"
+            },
+            "state": "COMMENTED",
+            "dismissed": false,
+            "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+            "body": "delivery-review plan 1 0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad approve",
+            "submitted_at": "2026-11-11T12:00:00Z",
+            "user_type": "Bot"
+          }
+        ],
+        "require_human": false
+      },
+      "output": {
+        "approved": true,
+        "approvers": [
+          101
+        ],
+        "rejectors": [],
+        "minimum": 1
+      }
+    },
+    {
+      "function": "evaluate_reviews",
+      "input": {
+        "stage": "plan",
+        "generation": 1,
+        "context_digest": "0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad",
+        "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+        "authorized_ids": [
+          101,
+          102
+        ],
+        "publisher_id": 900,
+        "minimum": 1,
+        "reviews": [
+          {
+            "id": 1,
+            "user": {
+              "id": 101,
+              "type": "User"
+            },
+            "state": "COMMENTED",
+            "dismissed": false,
+            "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+            "body": "delivery-review plan 1 0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad approve",
+            "submitted_at": "2026-11-11T12:00:00Z",
+            "user_type": "Bot"
+          }
+        ],
+        "require_human": true
+      },
+      "output": {
+        "approved": true,
+        "approvers": [
+          101
+        ],
+        "rejectors": [],
+        "minimum": 1,
+        "review_ids": {
+          "101": 1
+        }
+      }
+    },
+    {
+      "function": "evaluate_reviews",
+      "input": {
+        "stage": "plan",
+        "generation": 1,
+        "context_digest": "0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad",
+        "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+        "authorized_ids": [
+          101,
+          102
+        ],
+        "publisher_id": 900,
+        "minimum": 1,
+        "reviews": [
+          {
+            "id": 1,
+            "user": {
+              "id": 101,
+              "type": "User"
+            },
+            "state": "COMMENTED",
+            "dismissed": false,
+            "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+            "body": "delivery-review plan 1 0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad approve",
+            "submitted_at": "2026-11-11T12:00:00Z",
+            "performed_via_github_app": {
+              "id": 7
+            }
+          }
+        ],
+        "require_human": false
+      },
+      "output": {
+        "approved": true,
+        "approvers": [
+          101
+        ],
+        "rejectors": [],
+        "minimum": 1
+      }
+    },
+    {
+      "function": "evaluate_reviews",
+      "input": {
+        "stage": "plan",
+        "generation": 1,
+        "context_digest": "0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad",
+        "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+        "authorized_ids": [
+          101,
+          102
+        ],
+        "publisher_id": 900,
+        "minimum": 1,
+        "reviews": [
+          {
+            "id": 1,
+            "user": {
+              "id": 101,
+              "type": "User"
+            },
+            "state": "COMMENTED",
+            "dismissed": false,
+            "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+            "body": "delivery-review plan 1 0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad approve",
+            "submitted_at": "2026-11-11T12:00:00Z",
+            "performed_via_github_app": {
+              "id": 7
+            }
+          }
+        ],
+        "require_human": true
+      },
+      "output": {
+        "approved": false,
+        "approvers": [],
+        "rejectors": [],
+        "minimum": 1,
+        "review_ids": {}
+      }
+    },
+    {
+      "function": "evaluate_reviews",
+      "input": {
+        "stage": "plan",
+        "generation": 1,
+        "context_digest": "0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad",
+        "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+        "authorized_ids": [
+          101,
+          102
+        ],
+        "publisher_id": 900,
+        "minimum": 1,
+        "reviews": [
+          {
+            "id": 1,
+            "user": {
+              "id": 101,
+              "type": "User"
+            },
+            "state": "COMMENTED",
+            "dismissed": false,
+            "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+            "body": "delivery-review plan 1 0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad approve",
+            "submitted_at": "2026-11-11T11:00:00Z"
+          },
+          {
+            "id": 2,
+            "user": {
+              "id": 101,
+              "type": "User"
+            },
+            "state": "COMMENTED",
+            "dismissed": false,
+            "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+            "body": "delivery-review plan 1 0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad reject",
+            "submitted_at": "2026-11-11T10:00:00Z"
+          }
+        ],
+        "require_human": false
+      },
+      "output": {
+        "approved": true,
+        "approvers": [
+          101
+        ],
+        "rejectors": [],
+        "minimum": 1
+      }
+    },
+    {
+      "function": "evaluate_reviews",
+      "input": {
+        "stage": "plan",
+        "generation": 1,
+        "context_digest": "0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad",
+        "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+        "authorized_ids": [
+          101,
+          102
+        ],
+        "publisher_id": 900,
+        "minimum": 1,
+        "reviews": [
+          {
+            "id": 1,
+            "user": {
+              "id": 101,
+              "type": "User"
+            },
+            "state": "COMMENTED",
+            "dismissed": false,
+            "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+            "body": "delivery-review plan 1 0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad approve",
+            "submitted_at": "2026-11-11T11:00:00Z"
+          },
+          {
+            "id": 2,
+            "user": {
+              "id": 101,
+              "type": "User"
+            },
+            "state": "COMMENTED",
+            "dismissed": false,
+            "commit_id": "dddddddddddddddddddddddddddddddddddddddd",
+            "body": "delivery-review plan 1 0732959671cbfbb2504100b7771d739707a8aa5df61d717315f2ac1c0df7a8ad reject",
+            "submitted_at": "2026-11-11T10:00:00Z"
+          }
+        ],
+        "require_human": true
+      },
+      "output": {
+        "approved": true,
+        "approvers": [
+          101
+        ],
+        "rejectors": [],
+        "minimum": 1,
+        "review_ids": {
+          "101": 1
+        }
+      }
+    },
+    {
+      "function": "closeout_verdict",
+      "input": {
+        "checks": [],
+        "draft": false,
+        "merge_requested": false
+      },
+      "output": {
+        "delivery_status": "WAITING",
+        "merge_readiness": "WAITING",
+        "merge_requested": false,
+        "merge_performed": false
+      }
+    },
+    {
+      "function": "closeout_verdict",
+      "input": {
+        "checks": [],
+        "draft": true,
+        "merge_requested": false
+      },
+      "output": {
+        "delivery_status": "BLOCKED",
+        "merge_readiness": "BLOCKED",
+        "merge_requested": false,
+        "merge_performed": false
+      }
+    },
+    {
+      "function": "closeout_verdict",
+      "input": {
+        "checks": [
+          "success"
+        ],
+        "draft": false,
+        "merge_requested": false
+      },
+      "output": {
+        "delivery_status": "READY",
+        "merge_readiness": "READY",
+        "merge_requested": false,
+        "merge_performed": false
+      }
+    },
+    {
+      "function": "closeout_verdict",
+      "input": {
+        "checks": [
+          "success"
+        ],
+        "draft": true,
+        "merge_requested": false
+      },
+      "output": {
+        "delivery_status": "BLOCKED",
+        "merge_readiness": "BLOCKED",
+        "merge_requested": false,
+        "merge_performed": false
+      }
+    },
+    {
+      "function": "closeout_verdict",
+      "input": {
+        "checks": [
+          "pending"
+        ],
+        "draft": false,
+        "merge_requested": false
+      },
+      "output": {
+        "delivery_status": "WAITING",
+        "merge_readiness": "WAITING",
+        "merge_requested": false,
+        "merge_performed": false
+      }
+    },
+    {
+      "function": "closeout_verdict",
+      "input": {
+        "checks": [
+          "pending"
+        ],
+        "draft": true,
+        "merge_requested": false
+      },
+      "output": {
+        "delivery_status": "BLOCKED",
+        "merge_readiness": "BLOCKED",
+        "merge_requested": false,
+        "merge_performed": false
+      }
+    },
+    {
+      "function": "closeout_verdict",
+      "input": {
+        "checks": [
+          "failure"
+        ],
+        "draft": false,
+        "merge_requested": false
+      },
+      "output": {
+        "delivery_status": "BLOCKED",
+        "merge_readiness": "BLOCKED",
+        "merge_requested": false,
+        "merge_performed": false
+      }
+    },
+    {
+      "function": "closeout_verdict",
+      "input": {
+        "checks": [
+          "failure"
+        ],
+        "draft": true,
+        "merge_requested": false
+      },
+      "output": {
+        "delivery_status": "BLOCKED",
+        "merge_readiness": "BLOCKED",
+        "merge_requested": false,
+        "merge_performed": false
+      }
+    },
+    {
+      "function": "closeout_verdict",
+      "input": {
+        "checks": [
+          "success",
+          "pending"
+        ],
+        "draft": false,
+        "merge_requested": false
+      },
+      "output": {
+        "delivery_status": "WAITING",
+        "merge_readiness": "WAITING",
+        "merge_requested": false,
+        "merge_performed": false
+      }
+    },
+    {
+      "function": "closeout_verdict",
+      "input": {
+        "checks": [
+          "success",
+          "pending"
+        ],
+        "draft": true,
+        "merge_requested": false
+      },
+      "output": {
+        "delivery_status": "BLOCKED",
+        "merge_readiness": "BLOCKED",
+        "merge_requested": false,
+        "merge_performed": false
+      }
+    },
+    {
+      "function": "closeout_verdict",
+      "input": {
+        "checks": [
+          "success",
+          "failure"
+        ],
+        "draft": false,
+        "merge_requested": false
+      },
+      "output": {
+        "delivery_status": "BLOCKED",
+        "merge_readiness": "BLOCKED",
+        "merge_requested": false,
+        "merge_performed": false
+      }
+    },
+    {
+      "function": "closeout_verdict",
+      "input": {
+        "checks": [
+          "success",
+          "failure"
+        ],
+        "draft": true,
+        "merge_requested": false
+      },
+      "output": {
+        "delivery_status": "BLOCKED",
+        "merge_readiness": "BLOCKED",
+        "merge_requested": false,
+        "merge_performed": false
+      }
+    },
+    {
+      "function": "validate_manifest",
+      "input": {
+        "manifest": {
+          "schema_version": 1,
+          "kind": "rank",
+          "delivery_id": "parity",
+          "repo": "acme/widget",
+          "result": {}
+        },
+        "kind": "rank"
+      },
+      "output": null
+    },
+    {
+      "function": "validate_manifest",
+      "input": {
+        "manifest": {
+          "schema_version": 0,
+          "kind": "rank",
+          "delivery_id": "parity",
+          "repo": "acme/widget",
+          "result": {}
+        },
+        "kind": "rank"
+      },
+      "error": "manifest schema_version must be 1"
+    },
+    {
+      "function": "validate_manifest",
+      "input": {
+        "manifest": {
+          "schema_version": 1,
+          "kind": "other",
+          "delivery_id": "parity",
+          "repo": "acme/widget",
+          "result": {}
+        },
+        "kind": "rank"
+      },
+      "error": "manifest kind must be rank"
+    },
+    {
+      "function": "validate_manifest",
+      "input": {
+        "manifest": {
+          "schema_version": 1,
+          "kind": "rank",
+          "delivery_id": "parity",
+          "repo": "acme/widget",
+          "result": {
+            "execute_shell": "bad"
+          }
+        },
+        "kind": "rank"
+      },
+      "error": "unexpected rank manifest fields"
+    },
+    {
+      "function": "validate_manifest",
+      "input": {
+        "manifest": {
+          "schema_version": 1,
+          "kind": "plan",
+          "delivery_id": "parity",
+          "repo": "acme/widget",
+          "result": {}
+        },
+        "kind": "plan"
+      },
+      "output": null
+    },
+    {
+      "function": "validate_manifest",
+      "input": {
+        "manifest": {
+          "schema_version": 0,
+          "kind": "plan",
+          "delivery_id": "parity",
+          "repo": "acme/widget",
+          "result": {}
+        },
+        "kind": "plan"
+      },
+      "error": "manifest schema_version must be 1"
+    },
+    {
+      "function": "validate_manifest",
+      "input": {
+        "manifest": {
+          "schema_version": 1,
+          "kind": "other",
+          "delivery_id": "parity",
+          "repo": "acme/widget",
+          "result": {}
+        },
+        "kind": "plan"
+      },
+      "error": "manifest kind must be plan"
+    },
+    {
+      "function": "validate_manifest",
+      "input": {
+        "manifest": {
+          "schema_version": 1,
+          "kind": "plan",
+          "delivery_id": "parity",
+          "repo": "acme/widget",
+          "result": {
+            "execute_shell": "bad"
+          }
+        },
+        "kind": "plan"
+      },
+      "error": "unexpected plan manifest fields"
+    },
+    {
+      "function": "validate_manifest",
+      "input": {
+        "manifest": {
+          "schema_version": 1,
+          "kind": "implement",
+          "delivery_id": "parity",
+          "repo": "acme/widget",
+          "result": {}
+        },
+        "kind": "implement"
+      },
+      "output": null
+    },
+    {
+      "function": "validate_manifest",
+      "input": {
+        "manifest": {
+          "schema_version": 0,
+          "kind": "implement",
+          "delivery_id": "parity",
+          "repo": "acme/widget",
+          "result": {}
+        },
+        "kind": "implement"
+      },
+      "error": "manifest schema_version must be 1"
+    },
+    {
+      "function": "validate_manifest",
+      "input": {
+        "manifest": {
+          "schema_version": 1,
+          "kind": "other",
+          "delivery_id": "parity",
+          "repo": "acme/widget",
+          "result": {}
+        },
+        "kind": "implement"
+      },
+      "error": "manifest kind must be implement"
+    },
+    {
+      "function": "validate_manifest",
+      "input": {
+        "manifest": {
+          "schema_version": 1,
+          "kind": "implement",
+          "delivery_id": "parity",
+          "repo": "acme/widget",
+          "result": {
+            "execute_shell": "bad"
+          }
+        },
+        "kind": "implement"
+      },
+      "error": "unexpected implement manifest fields"
+    },
+    {
+      "function": "validate_manifest",
+      "input": {
+        "manifest": {
+          "schema_version": 1,
+          "kind": "closeout",
+          "delivery_id": "parity",
+          "repo": "acme/widget",
+          "result": {}
+        },
+        "kind": "closeout"
+      },
+      "output": null
+    },
+    {
+      "function": "validate_manifest",
+      "input": {
+        "manifest": {
+          "schema_version": 0,
+          "kind": "closeout",
+          "delivery_id": "parity",
+          "repo": "acme/widget",
+          "result": {}
+        },
+        "kind": "closeout"
+      },
+      "error": "manifest schema_version must be 1"
+    },
+    {
+      "function": "validate_manifest",
+      "input": {
+        "manifest": {
+          "schema_version": 1,
+          "kind": "other",
+          "delivery_id": "parity",
+          "repo": "acme/widget",
+          "result": {}
+        },
+        "kind": "closeout"
+      },
+      "error": "manifest kind must be closeout"
+    },
+    {
+      "function": "validate_manifest",
+      "input": {
+        "manifest": {
+          "schema_version": 1,
+          "kind": "closeout",
+          "delivery_id": "parity",
+          "repo": "acme/widget",
+          "result": {
+            "execute_shell": "bad"
+          }
+        },
+        "kind": "closeout"
+      },
+      "error": "unexpected closeout manifest fields"
+    }
+  ]
+}

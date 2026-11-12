@@ -10,7 +10,7 @@ license: MIT
 
 Notify the requester of verified publication in the invoking surface. Accept `--notify @login` for a GitHub mention when an authorized publishing identity can notify that account. Use the publication reference for author and self-notification handling.
 
-When invoked by the controlled [GitHub delivery workflow](../../workflows/github-delivery/README.md), keep GitHub read-only. Commit the verified planning artifacts and export the candidate bundle using the task packet. Return a schema-versioned `plan` manifest with the exact artifact paths and committed hashes, plan revision, issue, and inspected repository/ref/full SHA. Include the immediate base when it differs from the inspected baseline. The publisher owns the planning draft. A material artifact change advances the generation and requires fresh applicable approval.
+When invoked by the controlled [repository-scoped Delivery workflow](../../docs/paseo-delivery-v2/repository-experience.md), keep GitHub read-only. Commit the verified planning artifacts and export the candidate bundle using the task packet. Return a schema-versioned `plan` manifest with the exact artifact paths and committed hashes, plan revision, issue, and inspected repository/ref/full SHA. Include the immediate base when it differs from the inspected baseline. The publisher owns the planning draft. A material artifact change advances the generation and requires fresh applicable approval.
 
 ## Establish the planning baseline
 
